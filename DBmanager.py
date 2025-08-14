@@ -24,7 +24,7 @@ class DBmanager:
         return self.curr.fetchall()
 
     def get_all_TLEs(self):
-        query = "SELECT norad, line1, line2, creation_date FROM TLE_DATA"
+        query = "SELECT norad, line1, line2, creation_date FROM TLE_DATA order by norad"
         self.curr.execute(query)
         return self.curr.fetchall()
 

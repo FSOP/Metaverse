@@ -6,7 +6,8 @@
 # metaverse/TLEmanager.py
 from DBmanager import DBmanager
 from datetime import datetime, timedelta
-
+from constants import constants as const
+import math
 
 class TLEmanger:
     db_manager = None
@@ -15,7 +16,7 @@ class TLEmanger:
         self.db_manager = DBmanager()
 
 
-    def tle_epoch_to_datetime(self, epoch_str):
+    def tlepoch_to_datetime(self, epoch_str):
         # TLE epoch format: YYDDD.DDDDDDDD (YY = year, DDD = day of year)
         epoch = float(epoch_str)
         year = int(epoch // 1000)
@@ -40,7 +41,7 @@ class TLEmanger:
         return tle_data
         # print("pause")
         
-
+    # Insert TLEs from a file into the database
     def insert_tles_from_file(self, filename):
         self.db_manager.flush_TLE_data()  # Clear existing TLE data
 
@@ -57,23 +58,57 @@ class TLEmanger:
 
             # Extract NORAD number from line1 (columns 3-7)
             try:
-                norad = int(line1.split()[1][:-1])  # Extracts the NORAD number from line1
+                norad = int(line1[2:7])  # Extracts the NORAD number from line1
             except ValueError:  # Handle case where NORAD number is not an integer
                 norad = 99999
 
-            tle_epoch = line1.split()[3]
-            epoch_datetime = self.tle_epoch_to_datetime(tle_epoch)
+            tle_epoch = line1[18:32].strip()  # Extract epoch from line1]
+            epoch_datetime = self.tlepoch_to_datetime(tle_epoch)
             source = "CELESTRAK"
             self.db_manager.insert_TLE_data(source, epoch_datetime, norad, line1, line2, sat_name)
 
             if i % 10000 == 0:
                 print(f"Inserted TLE for NORAD {norad}: {sat_name}")
 
+    def compute_apogee_perigee(self, line2):
+        """
+        Computes the apogee and perigee from TLE data.
+        :return: List of tuples containing (norad, apogee, perigee).
+        """
+        orbit = self.extract_elements(line2)
+        sma = orbit['a']  # Semi-major axis [km]
+        ecc = orbit['e']  # Eccentricity        
+        apogee = sma * (1 + ecc) - const.EARTH_RADIUS_KM  # [km] Apogee altitude
+        perigee = sma * (1 - ecc) - const.EARTH_RADIUS_KM  # [km] Perigee altitude
+
+        return apogee, perigee
+
+    
+    def extract_elements(self, line2):
+        """
+        Extracts elements from TLE data.
+        :param tle_data: List of tuples containing TLE data.
+        :return: List of tuples containing (norad, line1, line2).
+        """
+        # line2 = tle_data[2]
+
+        orbit = {}        
+        orbit['i'] = float(line2[8:16].strip()) # inclination [deg]        
+        orbit['Om'] = float(line2[17:25].strip()) # RAAN [deg]        
+        orbit['e'] = float("0." + line2[26:33].strip()) # eccentricity        
+        orbit['w'] = float(line2[34:42].strip()) # argument of perigee [deg]        
+        orbit['n'] = float(line2[52:63].strip()) # mean motion [rev/day]
+        
+        n_rad = orbit['n'] * 2 * math.pi / 86400  # rad/s        
+        orbit['a'] = (const.MU / n_rad**2)**(1/3)
+            
+        return orbit
+
 
 if __name__ == "__main__":
     tle_manager = TLEmanger()
-    tle_manager.all_tles()  # Fetch all TLEs from the database
-    # tle_path = "/home/user1229/metaverse/TLEs/20250813_TLE.txt"  # Replace with your TLE file path
-    # tle_manager.insert_tles_from_file(tle_path)  # Replace with your TLE file path
+    # tle_manager.all_tles()  # Fetch all TLEs from the database
+    tle_path = "/home/user1229/metaverse/TLEs/20250813_TLE.txt"  # Replace with your TLE file path
+    tle_manager.insert_tles_from_file(tle_path)  # Replace with your TLE file path
 
     print("end")
