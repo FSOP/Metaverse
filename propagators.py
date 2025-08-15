@@ -21,10 +21,10 @@ class propagators:
         # Implementation of TLE propagation logic goes here
         sma = orbit['sma']  # [km] Semi-major axis
         ecc = orbit['ecc']  # Eccentricity
-        inc = orbit['inc']  # [deg] Inclination
+        inc = orbit['inc']  # [rad] Inclination
         raan = orbit['raan']  # Right Ascension of Ascending Node
         argp = orbit['argp']  # Argument of Perigee
-        nu = orbit['nu']      # [deg] True Anomaly
+        nu = orbit['nu']      # [rad] True Anomaly
 
         # mean motion
         n = np.sqrt(const.MU / sma**3)  # Mean motion in rad/s
@@ -57,9 +57,9 @@ class propagators:
         """
         # Implementation of orbit path computation logic goes here        
         ecc = orbit['e']  # Eccentricity
-        inc = np.radians(orbit['i'])  # [rad] Inclination
-        raan = np.radians(orbit['Om'])  # [rad] Right Ascension of Ascending Node
-        argp = np.radians(orbit['w'])  # [rad] Argument of Perigee
+        inc = orbit['i']  # [rad] Inclination
+        raan = orbit['Om']  # [rad] Right Ascension of Ascending Node
+        argp = orbit['w']  # [rad] Argument of Perigee
         n = orbit['n']      # Mean motion in rad/s
 
         # Compute the position in the perifocal coordinate system

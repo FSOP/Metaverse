@@ -19,7 +19,7 @@ class DBmanager:
 
 
     def get_single_TLE(self, norad):
-        query = "SELECT line1, line2 FROM TLE_DATA WHERE norad = ?"
+        query = "SELECT norad, line1, line2, creation_date FROM TLE_DATA WHERE norad = ?"
         self.curr.execute(query, (norad,))
         return self.curr.fetchall()
 

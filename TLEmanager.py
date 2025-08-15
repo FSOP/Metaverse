@@ -8,6 +8,7 @@ from DBmanager import DBmanager
 from datetime import datetime, timedelta
 from constants import constants as const
 import math
+import numpy as np
 
 class TLEmanger:
     db_manager = None
@@ -84,7 +85,7 @@ class TLEmanger:
         return apogee, perigee
 
     
-    def extract_elements(self, line2):
+    def extract_elements(self, line2, line1):
         """
         Extracts elements from TLE data.
         :param tle_data: List of tuples containing TLE data.
@@ -93,11 +94,13 @@ class TLEmanger:
         # line2 = tle_data[2]
 
         orbit = {}        
-        orbit['i'] = float(line2[8:16].strip()) # inclination [deg]        
-        orbit['Om'] = float(line2[17:25].strip()) # RAAN [deg]        
-        orbit['e'] = float("0." + line2[26:33].strip()) # eccentricity        
-        orbit['w'] = float(line2[34:42].strip()) # argument of perigee [deg]        
-        orbit['n'] = float(line2[52:63].strip()) # mean motion [rev/day]
+        orbit['i'] = np.radians(float(line2[8:16].strip()))     # inclination [rad]        
+        orbit['Om'] = np.radians(float(line2[17:25].strip()))   # RAAN [rad]        
+        orbit['e'] = float("0." + line2[26:33].strip())         # eccentricity        
+        orbit['w'] = np.radians(float(line2[34:42].strip()))    # argument of perigee [rad]        
+        orbit['n'] = float(line2[52:63].strip())                # mean motion [rev/day]
+        orbit['ma'] = np.radians(float(line2[43:52].strip()))   # mean anomaly [rad]
+        orbit['n_dot'] = float(line1[33:43].strip())  # mean motion derivative [rev/day^2]
         
         n_rad = orbit['n'] * 2 * math.pi / 86400  # rad/s        
         orbit['a'] = (const.MU / n_rad**2)**(1/3)
