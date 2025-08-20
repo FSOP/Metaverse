@@ -42,3 +42,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# big files gfc, bsp 파일 
+*.bsp
+*.gfc

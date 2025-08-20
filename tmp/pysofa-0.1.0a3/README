@@ -1,0 +1,18 @@
+pysofa
+===========
+
+A python module for accessing International Astronomical Union's SOFA library
+(<http://www.iausofa.org/>) from within python.
+Web Page: http://code.google.com/p/pysofa/
+License: MIT License
+
+Installation
+------------
+
+If you have numpy (http://numpy.scipy.org/) installed, just do
+
+python setup.py install
+
+On some linux distributions, this may need to be
+
+sudo python setup.py install
