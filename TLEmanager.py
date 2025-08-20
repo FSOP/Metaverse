@@ -85,7 +85,7 @@ class TLEmanger:
         return apogee, perigee
 
     
-    def extract_elements(self, line2, line1):
+    def extract_elements(self, line2):
         """
         Extracts elements from TLE data.
         :param tle_data: List of tuples containing TLE data.
@@ -100,7 +100,7 @@ class TLEmanger:
         orbit['w'] = np.radians(float(line2[34:42].strip()))    # argument of perigee [rad]        
         orbit['n'] = float(line2[52:63].strip())                # mean motion [rev/day]
         orbit['ma'] = np.radians(float(line2[43:52].strip()))   # mean anomaly [rad]
-        orbit['n_dot'] = float(line1[33:43].strip())  # mean motion derivative [rev/day^2]
+        # orbit['n_dot'] = float(line1[33:43].strip())  # mean motion derivative [rev/day^2]
         
         n_rad = orbit['n'] * 2 * math.pi / 86400  # rad/s        
         orbit['a'] = (const.MU / n_rad**2)**(1/3)
@@ -111,7 +111,7 @@ class TLEmanger:
 if __name__ == "__main__":
     tle_manager = TLEmanger()
     # tle_manager.all_tles()  # Fetch all TLEs from the database
-    tle_path = "/home/user1229/metaverse/TLEs/20250813_TLE.txt"  # Replace with your TLE file path
+    tle_path = "/home/user1229/metaverse/TLEs/20250815TLE.txt"  # Replace with your TLE file path
     tle_manager.insert_tles_from_file(tle_path)  # Replace with your TLE file path
 
     print("end")
