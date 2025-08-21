@@ -5,6 +5,14 @@ from datetime import datetime
 from astropy.time import Time
 from scipy.integrate import solve_ivp
 
+def altitude_event(t, y):
+    r = y[:3]
+    alt = np.linalg.norm(r) / 1000.0 - 6378.137  # km
+    return alt  # 0이 되는 순간 이벤트 발생
+
+altitude_event.terminal = True
+# altitude_event.direction = -1  # 하강 방향에서만 이벤트 발생
+
 def propagate_with_scipy(start_time_utc, end_time_utc, output_step_sec, 
                          y0, force_model, rtol=1e-12, atol=1e-12):
     """
@@ -25,12 +33,13 @@ def propagate_with_scipy(start_time_utc, end_time_utc, output_step_sec,
     # 3. solve_ivp 함수 호출
     solution = solve_ivp(
         fun=force_model,
-        t_span=t_span,
-        y0=y0,
-        method='DOP853',
-        t_eval=t_eval,
-        rtol=rtol,
-        atol=atol
+        t_span=t_span,  # 적분 구간
+        y0=y0,          # 초기 상태 벡터
+        method='DOP853',# 적분 방법
+        t_eval=t_eval,  # 출력 시간 배열
+        rtol=rtol,      # 상대 오차 허용치
+        atol=atol,      # 절대 오차 허용치
+        events=altitude_event   # 고도 이벤트
     )
 
     print("궤도 전파 완료.")

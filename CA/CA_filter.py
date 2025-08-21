@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
-from TLEmanager import TLEmanger
-from propagators import propagators
-from orbitcalculator import orcal
-from constants import constants as const
+from MISC.TLEmanager import TLEmanger
+from CA.propagators import propagators
+from CA.orbitcalculator import orcal
+from MISC.constants import constants as const
 from sgp4.api import Satrec, jday
 from math import acos, atan2, sqrt, pi
 import numpy as np
@@ -15,20 +15,33 @@ class CA_filter:
         self.orcal = orcal()  # Placeholder values for name, radius, and period
         pass
 
-    def filter_outdated_tles(self, tle_data, start_time, end_time, pad_days):
+    def filter_BSTAR(self, tle, threshold_bstar):
         """
-        Filters out TLEs that are older than 30 days from the current time.
-        :param tle_data: List of tuples containing TLE data (epoch, line1, line2).
-        :param current_time: Current datetime to compare against.
-        :return: Filtered list of TLEs.
+        Filters TLEs based on B* (drag term).
+        :param tle: TLE data
+        :param threshold_bstar: B* threshold
+        :return: Filtered TLEs
         """
         filtered_tles = []
-        start_limit = start_time - timedelta(days=pad_days)
-        end_limit = end_time + timedelta(days=pad_days)
+        for t in tle:
+            bstar = self.tle_manager.extract_bstar(t[2])
+            if abs(bstar) > threshold_bstar:
+                filtered_tles.append(t)
+        return filtered_tles
+    
 
-        for norad, line1, line2, tle_epoch in tle_data:
-            if start_limit <= tle_epoch <= end_limit:
-                filtered_tles.append((norad, line1, line2, tle_epoch))
+    def filter_perigee(self, tle, threshold_alt):
+        """  
+        Filters TLEs based on perigee altitude.
+        :param tle: TLE data
+        :param threshold_alt: Altitude threshold
+        :return: Filtered TLEs
+        """
+        filtered_tles = []
+        for t in tle:
+            _, perigee = self.tle_manager.compute_apogee_perigee(t[2])
+            if perigee < threshold_alt:
+                filtered_tles.append(t)
         return filtered_tles
 
     def filter_altitude(self, tle_data, ref_line2, pad=0):
@@ -292,8 +305,32 @@ class CA_filter:
                 )
         return results
 
+    def get_state_at_altitude(self, sat, start_time, target_altitude_km, max_days=30, step_minutes=10):
+        """
+        Propagate the satellite using SGP4 until it reaches the target altitude.
+        Returns (reentry_time, state_vector) where:
+        - reentry_time: datetime when altitude <= target_altitude_km
+        - state_vector: (x, y, z, vx, vy, vz) in km and km/s
+        """
+        sat = Satrec.twoline2rv(sat[1], sat[2])
+        ref_epoch = start_time
+        for t in range(int((max_days * 24 * 60) / step_minutes)):
+            jd, fr = jday(ref_epoch.year, ref_epoch.month, ref_epoch.day, ref_epoch.hour, ref_epoch.minute, ref_epoch.second + ref_epoch.microsecond / 1e6)
+            e, r, v = sat.sgp4(jd, fr)
+            # SGP4 에러 처리
+            if e == 6:    # 위성 추락
+                return 2, None, None
+            elif e != 0:  # 기타 오류
+                return 1, None, None
+            alt = (r[0]**2 + r[1]**2 + r[2]**2)**0.5 - const.EARTH_RADIUS_KM
+            if alt <= target_altitude_km:   # 정상적으로 목표 고도 도달
+                return 0, ref_epoch, (r[0], r[1], r[2], v[0], v[1], v[2])
+            ref_epoch += timedelta(minutes=step_minutes)
+        # 목표 고도 도달 못함(오류)
+        return 1, ref_epoch + timedelta(minutes=t), None
 
-from DBmanager import DBmanager
+
+from MISC.DBmanager import DBmanager
 
 if __name__ == "__main__":
     CA_filter_instance = CA_filter()

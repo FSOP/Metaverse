@@ -4,9 +4,9 @@
 # propagated, or distributed except according to the terms contained in the LICENSE file.    
 
 # metaverse/TLEmanager.py
-from DBmanager import DBmanager
+from MISC.DBmanager import DBmanager
 from datetime import datetime, timedelta
-from constants import constants as const
+from MISC.constants import constants as const
 import math
 import numpy as np
 
@@ -15,7 +15,6 @@ class TLEmanger:
 
     def __init__(self):
         self.db_manager = DBmanager()
-
 
     def tlepoch_to_datetime(self, epoch_str):
         # TLE epoch format: YYDDD.DDDDDDDD (YY = year, DDD = day of year)
@@ -41,6 +40,24 @@ class TLEmanger:
         tle_data = self.db_manager.get_all_TLEs()
         return tle_data
         # print("pause")
+    
+    def filter_outdated_tles(self, tle_data, start_time, end_time, pad_days):
+        """
+        Filters out TLEs that are older than 30 days from the current time.
+        :param tle_data: List of tuples containing TLE data (epoch, line1, line2).
+        :param current_time: Current datetime to compare against.
+        :return: Filtered list of TLEs.
+        """
+        filtered_tles = []
+        start_limit = start_time - timedelta(days=pad_days)
+        end_limit = end_time + timedelta(days=pad_days)
+
+        for norad, line1, line2, tle_epoch in tle_data:
+            if start_limit <= tle_epoch <= end_limit:
+                filtered_tles.append((norad, line1, line2, tle_epoch))
+        return filtered_tles
+    
+
         
     # Insert TLEs from a file into the database
     def insert_tles_from_file(self, filename):
@@ -106,6 +123,30 @@ class TLEmanger:
         orbit['a'] = (const.MU / n_rad**2)**(1/3)
             
         return orbit
+
+    def extract_bstar(self,line1):
+        """
+        Extracts the Bstar drag term from TLE line 1.
+        Bstar is in columns 54–61 (8 chars).
+        Example field: '-11606-4' -> mantissa = -0.11606, exponent = -4
+        """
+        bstar_field = line1[53:61]  # Python uses 0-based indexing
+
+        if len(bstar_field) != 8:
+            raise ValueError("TLE line length insufficient to parse Bstar (need cols 54:61).")
+
+        mantissa_sign = bstar_field[0] if bstar_field[0] in '+-' else '+'
+        mantissa_digits = bstar_field[1:6]
+        exp_sign = bstar_field[6]
+        exp_digit = bstar_field[7]
+
+        m = float(mantissa_digits) / 1e5
+        if mantissa_sign == '-':
+            m = -m
+        e = int(exp_sign + exp_digit)
+
+        bstar = m * 10 ** e
+        return bstar
 
 
 if __name__ == "__main__":

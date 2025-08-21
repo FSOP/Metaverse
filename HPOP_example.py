@@ -65,7 +65,7 @@ if __name__ == "__main__":
 
     # (c) 궤도 전파 기간을 datetime으로 설정
     start_time = datetime(2025, 8, 17, 11, 0, 0)  # 2025년 8월 17일 11:00
-    duration_min = 60*12
+    duration_min = 60*1
     end_time = start_time + timedelta(seconds= duration_min*60)
     output_step_seconds = 1 # 60초 간격으로 결과 저장
 

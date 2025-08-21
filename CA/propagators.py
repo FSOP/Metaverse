@@ -1,6 +1,6 @@
 
 import numpy as np
-from constants import constants as const
+from MISC.constants import constants as const
 
 
 class propagators:

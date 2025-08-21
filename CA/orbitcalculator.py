@@ -1,6 +1,6 @@
 import numpy as np
 from math import acos, atan2, sqrt
-from constants import constants as const
+from MISC.constants import constants as const
 
 
 class orcal:
