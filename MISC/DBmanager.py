@@ -17,6 +17,10 @@ class DBmanager:
         )
         self.curr = self.conn.cursor()
 
+    def insert_obs_data(self, epoch, azimuth, elevation, rng, obs_site, event_id, aux):
+        query = "INSERT INTO observations (epoch, obs_site, azimuth, elevation, sat_range, event_id, aux_data) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        self.curr.execute(query, (epoch, obs_site, azimuth, elevation, rng, event_id, aux))
+        self.conn.commit()
 
     def get_single_TLE(self, norad):
         query = "SELECT norad, line1, line2, creation_date FROM TLE_DATA WHERE norad = ?"

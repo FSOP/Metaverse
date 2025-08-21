@@ -13,10 +13,9 @@ class propagators:
     def simple_twobody(self, orbit, theta):
         """
         Propagates the TLE data for a given NORAD ID between start and end times.
-        :param norad: NORAD ID of the satellite.
-        :param start_time: Start time for propagation.
-        :param end_time: End time for propagation.
-        :return: List of propagated states.
+        :param orbit: Dictionary containing orbital elements.
+        :param theta: [rad] True anomaly at which to compute the orbit path.
+        :return: Propagated state vector.
         """
         # Implementation of TLE propagation logic goes here
         sma = orbit['sma']  # [km] Semi-major axis

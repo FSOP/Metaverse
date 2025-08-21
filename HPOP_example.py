@@ -61,10 +61,11 @@ if __name__ == "__main__":
     # (b) 위성 초기 상태 벡터 (이전과 동일)
     r0 = np.array([-1939810, 5568630, 3540650])
     v0 = np.array([-5459.92, -4067.29, 3405.61])
+    state_epoch = datetime(2025, 8, 17, 11, 0, 0)  # 2025년 8월 17일 11:00
     y_initial = np.hstack((r0, v0))
 
     # (c) 궤도 전파 기간을 datetime으로 설정
-    start_time = datetime(2025, 8, 17, 11, 0, 0)  # 2025년 8월 17일 11:00
+    start_time = state_epoch
     duration_min = 60*1
     end_time = start_time + timedelta(seconds= duration_min*60)
     output_step_seconds = 1 # 60초 간격으로 결과 저장
@@ -87,7 +88,7 @@ if __name__ == "__main__":
     
     # (f) datetime을 사용하는 SciPy 전파 함수 호출
     ephemeris = propagate_with_scipy(
-        start_time, end_time, output_step_seconds,
+        state_epoch, (start_time, end_time), output_step_seconds,
         y_initial, force_model, rtol=1e-12, atol=1e-12
     )
 
