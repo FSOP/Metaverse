@@ -18,20 +18,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 class HPOP_handle:
     def __init__(self):
         self.ephem_file = os.path.join(PROJECT_ROOT, 'de440.bsp')
-        self.gravity_file = os.path.join(PROJECT_ROOT, 'EGM2008.gfc')    
-        self.CONSTANTS = {
-            'GM_Earth': 3.986004418e14,     # m^3/s^2
-            'GM_Sun': 1.32712440018e20,
-            'GM_Moon': 4.9048695e12,
-            'R_Earth': 6378137.0,            # 지구 평균 반경 [m]
-            'AU': 149597870700.0,            # 천문단위 [m]
-            'P_Sol': 4.56e-6,                # 1 AU에서의 태양 압력 [N/m^2]
-            'omega_Earth': 7.292115e-5       # 지구 자전 각속도 [rad/s]
-        }
-
+        self.gravity_file = os.path.join(PROJECT_ROOT, 'EGM2008.gfc')     
         self.AUX_PARAMS = {
             'mass': 1000.0, 'area_drag': 10.0, 'area_solar': 10.0,
-            'Cd': 2.35, 'Cr': 1.0, 'n_max': 70, 'm_max': 70,
+            'Cd': 2.2, 'Cr': 1.0, 'n_max': 70, 'm_max': 70,
             'sun': False, 'moon': False, 'sRad': False, 'drag': True
         }
 
@@ -41,7 +31,6 @@ class HPOP_handle:
         self.gravity_model = GravityModel(self.gravity_file, n_max=self.AUX_PARAMS['n_max'], m_max=self.AUX_PARAMS['m_max'])
         self.atmosphere_model = AtmosphereModel()
         self.force_model = ForceModel(
-            consts=self.CONSTANTS,
             aux_params=self.AUX_PARAMS,
             eop_manager=self.eop_manager,
             ephem_manager=self.ephem_manager,

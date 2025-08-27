@@ -16,6 +16,16 @@ class DBmanager:
             database    =self.database
         )
         self.curr = self.conn.cursor()
+    
+    def get_unique_obsid(self):
+        query = "SELECT DISTINCT(event_id) FROM observations"
+        self.curr.execute(query)
+        return self.curr.fetchall()
+    
+    def get_obs_data(self, event_id):
+        query = "SELECT * FROM observations WHERE event_id = ?"
+        self.curr.execute(query, (event_id,))
+        return self.curr.fetchall()
 
     def insert_obs_data(self, epoch, azimuth, elevation, rng, obs_site, event_id, aux):
         query = "INSERT INTO observations (epoch, obs_site, azimuth, elevation, sat_range, event_id, aux_data) VALUES (?, ?, ?, ?, ?, ?, ?)"

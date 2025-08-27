@@ -36,3 +36,6 @@ class GravityModel:
 
                 
         return np.array([g_x, g_y, g_z])
+
+    def get_CS(self):
+        return self.coeffs.coeffs  # shape: (2, lmax+1, lmax+1)

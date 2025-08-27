@@ -4,6 +4,7 @@ import numpy as np
 from HPOP.time_utils import convert_time_scales
 from HPOP.coordinate_systems import compute_iers_matrices
 from HPOP.perturbations import accel_point_mass, accel_solar_radiation_pressure, accel_drag
+from MISC import constants as const
 
 # --------------------------------------------------------------------------
 # 세부 계산을 위한 빈 함수들 (나중에 채워나갈 부분)
@@ -39,16 +40,14 @@ class ForceModel:
     위성에 가해지는 모든 섭동힘을 계산하는 모델 클래스입니다.
     MATLAB의 Accel.m 함수의 구조와 역할을 따릅니다.
     """
-    def __init__(self, consts, aux_params, eop_manager, ephem_manager, gravity_model, atmosphere_model):
+    def __init__(self, aux_params, eop_manager, ephem_manager, gravity_model, atmosphere_model):
         """
         클래스 생성 시 시뮬레이션에 필요한 모든 고정 데이터와 설정을 저장합니다.
         
         Args:
-            consts (dict): GM 값, 지구 자전 속도 등 물리 상수.
             aux_params (dict): 위성 제원(질량, 면적) 및 어떤 힘을 켤지 결정하는 플래그.
             eop_data: IERS 지구 방향 매개변수 데이터.
         """
-        self.consts = consts
         self.aux_params = aux_params
         self.eop_manager = eop_manager
         self.ephem_manager = ephem_manager
@@ -76,7 +75,7 @@ class ForceModel:
         # IERS 데이터 조회 (EOP)
         x_pole, y_pole, ut1_utc, lod, dpsi, deps, dx_pole, dy_pole, tai_utc = \
             self.eop_manager.get_eop_values(mjd_utc)
-            
+
         # 다양한 시간 척도로 변환
         mjd_ut1, mjd_tt, mjd_tdb = convert_time_scales(mjd_utc, self.eop_manager)
         
@@ -112,12 +111,12 @@ class ForceModel:
         r_earth_ssb_m = ephem_m['earth']
         accel_sun = np.zeros(3)
         if self.aux_params.get('sun', False):
-            accel_sun = accel_point_mass(r_sat_icrs, r_earth_ssb_m, ephem_m['sun'], self.consts['GM_Sun'])
+            accel_sun = accel_point_mass(r_sat_icrs, r_earth_ssb_m, ephem_m['sun'], const.GM_Sun)
             total_acceleration += accel_sun
 
         accel_moon = np.zeros(3)
         if self.aux_params.get('moon', False):
-            accel_moon = accel_point_mass(r_sat_icrs, r_earth_ssb_m, ephem_m['moon'], self.consts['GM_Moon'])
+            accel_moon = accel_point_mass(r_sat_icrs, r_earth_ssb_m, ephem_m['moon'], const.GM_Moon)
             total_acceleration += accel_moon
 
         # (c) 태양복사압 (SRP)
@@ -127,7 +126,6 @@ class ForceModel:
                 r_sat_icrs, 
                 ephem_m['earth'], 
                 ephem_m['sun'],
-                self.consts,
                 self.aux_params
             )
             total_acceleration += accel_srp
@@ -136,7 +134,7 @@ class ForceModel:
         accel_ad = np.zeros(3)
         if self.aux_params.get('drag', False):
             density = self.atmosphere_model.get_density(mjd_utc, r_sat_itrs)
-            accel_ad = accel_drag(density, r_sat_itrs, v_sat_icrs, E, self.consts, self.aux_params)
+            accel_ad = accel_drag(density, r_sat_itrs, v_sat_icrs, E, self.aux_params)
             total_acceleration += accel_ad
             
         # # (f) 상대론적 효과

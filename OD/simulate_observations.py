@@ -38,7 +38,9 @@ def simulate_observations(sat, epochs, site):
 if __name__ == "__main__":
     dbman = DBmanager()
     start_time = datetime(2025, 8, 17, 23, 20, 00)
-    epochs = [start_time, start_time + timedelta(days=0.5)]
+    start_time = datetime(2025, 8, 18, 6, 0, 0)
+    epochs = [start_time, start_time + timedelta(days=1/24)]
+    SWITCH_WRITE_DB = 0
 
     sat = {
         'sma': 6878.14,
@@ -47,7 +49,7 @@ if __name__ == "__main__":
         'raan': 66.2117,
         'argp': 0,
         'nu': 23.2427,
-        'epoch': datetime(2025, 8, 17, 23,28, 58)
+        'epoch': datetime(2025, 8, 17, 23, 28, 58)
     }
 
     site = {
@@ -66,9 +68,12 @@ if __name__ == "__main__":
             event_id = aux['id']
             site_str = f"{site['lat']}_{site['lon']}_{site['alt']}"
             state_epoch = aux['state_epoch'].strftime('%Y-%m-%d %H:%M:%S')
-            state = ','.join(f'{x:.2f}' for x in aux['state']/1e3)  # Convert to km
+            state = ','.join(f'{x:.4f}' for x in aux['state']/1e3)  # Convert to km
 
             str_aux = f"{state_epoch},{state}"
-            dbman.insert_obs_data(epoch, azimuth, elevation, rng, site_str, event_id, str_aux)
+            if SWITCH_WRITE_DB:
+                dbman.insert_obs_data(epoch, azimuth, elevation, rng, site_str, event_id, str_aux)
+            else:
+                print(f"{epoch}, {azimuth:.3f}, {elevation:.3f}, {rng/1e3:.3f}, {str_aux}")
             pass
         # dbman.insert_obs_data(**aux)

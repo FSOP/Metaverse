@@ -48,7 +48,8 @@ AUX_PARAMS = {
 }
 
 if __name__ == "__main__":
-    
+    # easyHPOP_handle.py에 더 간편한 HPOP사용 예시가 있음
+
     # (a) 데이터 파일 경로 (이전과 동일)
     ephem_file = './metaverse/de440.bsp'
     gravity_file = './metaverse/EGM2008.gfc'    

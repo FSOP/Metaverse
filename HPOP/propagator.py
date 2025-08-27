@@ -53,6 +53,8 @@ def _integrate_segment(t_start_rel, t_end_rel, y0_rel, force_model, output_step_
         events=altitude_event
     )
     # Shift solution.t back to global relative frame
+    if isinstance(sol.t, list):
+        sol.t = np.array(sol.t)
     sol.t = sol.t + t_start_rel
     return sol
 
@@ -82,7 +84,7 @@ def propagate_with_scipy(state_epoch, analysis_period, output_step_sec,
             # integrate from 0 -> t_start_rel (negative). Pass t_end_rel = t_start_rel
             sol = _integrate_segment(0.0, t_start_rel, y0, force_model, output_step_sec, rtol, atol, epoch_mjd)
         # print("궤도 전파 완료.")
-        ephemeris_table = np.column_stack((sol.t, sol.y.T))
+        ephemeris_table = np.column_stack((sol.t, np.array(sol.y).T))
         return ephemeris_table
 
     # Case B: interval straddles epoch (e.g., -900 to +900) while y0 at epoch
@@ -109,7 +111,7 @@ def propagate_with_scipy(state_epoch, analysis_period, output_step_sec,
         t_combined = np.concatenate([t_back_rev, sol_fwd.t])
         y_combined = np.concatenate([y_back_rev, sol_fwd.y], axis=1)
         # print("궤도 전파 완료 (양방향 결합).")
-        ephemeris_table = np.column_stack((t_combined, y_combined.T))
+        ephemeris_table = np.column_stack((t_combined, np.array(y_combined).T))
         return ephemeris_table
 
     # Case C: Neither endpoint touches epoch and no straddle with y0 at epoch -> user provided y0 inconsistent
@@ -120,5 +122,5 @@ def propagate_with_scipy(state_epoch, analysis_period, output_step_sec,
         sol = _integrate_segment(t_start_rel, t_end_rel, y0, force_model, output_step_sec, rtol, atol, epoch_mjd)
     else:
         sol = _integrate_segment(t_start_rel, t_end_rel, y0, force_model, output_step_sec, rtol, atol, epoch_mjd)
-    ephemeris_table = np.column_stack((sol.t, sol.y.T))
+    ephemeris_table = np.column_stack((sol.t, np.array(sol.y).T))
     return ephemeris_table

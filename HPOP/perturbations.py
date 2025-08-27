@@ -1,6 +1,7 @@
 # perturbations.py
 
 import numpy as np
+from MISC import constants as const
 
 def accel_point_mass(r_sat_earth, r_earth_ssb, r_body_ssb, gm_body):
     """
@@ -33,7 +34,7 @@ def accel_point_mass(r_sat_earth, r_earth_ssb, r_body_ssb, gm_body):
     
     return acceleration
 
-def accel_solar_radiation_pressure(r_sat_earth, r_earth_ssb, r_sun_ssb, consts, aux_params):
+def accel_solar_radiation_pressure(r_sat_earth, r_earth_ssb, r_sun_ssb, aux_params):
     """
     태양복사압(SRP)에 의한 섭동 가속도를 계산합니다.
     간단한 원통형 지구 그림자 모델을 포함합니다.
@@ -41,8 +42,7 @@ def accel_solar_radiation_pressure(r_sat_earth, r_earth_ssb, r_sun_ssb, consts, 
     Args:
         r_sat_earth (np.ndarray): 지구 중심에서 위성까지의 위치 벡터 [m].
         r_earth_ssb (np.ndarray): SSB에서 지구까지의 위치 벡터 [m].
-        r_sun_ssb (np.ndarray): SSB에서 태양까지의 위치 벡터 [m].
-        consts (dict): P_Sol, AU, R_Earth 등 물리 상수.
+        r_sun_ssb (np.ndarray): SSB에서 태양까지의 위치 벡터 [m].       
         aux_params (dict): Cr, area_solar, mass 등 위성 제원.
 
     Returns:
@@ -61,7 +61,7 @@ def accel_solar_radiation_pressure(r_sat_earth, r_earth_ssb, r_sun_ssb, consts, 
         dist_from_sun_earth_line = np.linalg.norm(np.cross(r_sat_earth, r_sun_earth)) / np.linalg.norm(r_sun_earth)
         
         # 거리가 지구 반경보다 작으면 그림자 안에 있는 것
-        if dist_from_sun_earth_line < consts['R_Earth']:
+        if dist_from_sun_earth_line < const.R_Earth:
             nu = 0.0
             
     # 3. SRP 가속도 계산
@@ -69,7 +69,7 @@ def accel_solar_radiation_pressure(r_sat_earth, r_earth_ssb, r_sun_ssb, consts, 
         # 태양과의 거리
         d_sun_sat = np.linalg.norm(r_sun_sat)
         # 1 AU에서의 태양 압력을 현재 거리 기준으로 보정
-        p_sol = consts['P_Sol'] * (consts['AU'] / d_sun_sat)**2
+        p_sol = const.P_Sol * (const.AU / d_sun_sat)**2
         # 태양에서 위성을 향하는 단위 벡터
         u_sun_sat = r_sun_sat / d_sun_sat
         
@@ -80,7 +80,7 @@ def accel_solar_radiation_pressure(r_sat_earth, r_earth_ssb, r_sun_ssb, consts, 
         
     return srp_accel
 
-def accel_drag(density, r_sat_itrs, v_sat_icrs, E_icrs_to_itrs, consts, aux_params):
+def accel_drag(density, r_sat_itrs, v_sat_icrs, E_icrs_to_itrs, aux_params):
     """
     대기 항력에 의한 섭동 가속도를 계산합니다.
 
@@ -88,8 +88,7 @@ def accel_drag(density, r_sat_itrs, v_sat_icrs, E_icrs_to_itrs, consts, aux_para
         density (float): 위성 위치에서의 대기 밀도 [kg/m^3].
         r_sat_itrs (np.ndarray): 위성 위치 (ITRS) [m].
         v_sat_icrs (np.ndarray): 위성 속도 (ICRS) [m/s].
-        E_icrs_to_itrs (np.ndarray): ICRS -> ITRS 변환 행렬.
-        consts (dict): omega_Earth 등 물리 상수.
+        E_icrs_to_itrs (np.ndarray): ICRS -> ITRS 변환 행렬.      
         aux_params (dict): Cd, area_drag, mass 등 위성 제원.
 
     Returns:
@@ -98,7 +97,7 @@ def accel_drag(density, r_sat_itrs, v_sat_icrs, E_icrs_to_itrs, consts, aux_para
     # 1. 대기 대비 위성의 상대 속도 벡터 계산
     # (a) ITRS 좌표계에서의 위성 속도 계산
     # v_itrs = v_icrs - omega x r_icrs (E * v_icrs 아님!)
-    omega_vec = np.array([0, 0, consts['omega_Earth']])
+    omega_vec = np.array([0, 0, const.omega_Earth])
     v_sat_itrs = E_icrs_to_itrs @ v_sat_icrs - np.cross(omega_vec, r_sat_itrs)
     
     # (b) 대기는 지구와 함께 자전하므로, 대기의 속도는 0으로 가정.
