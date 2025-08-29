@@ -4,14 +4,17 @@ import numpy as np
 from datetime import datetime
 from astropy.time import Time
 from scipy.integrate import solve_ivp
+from datetime import timedelta
 
 def altitude_event(t, y):
     r = y[:3]
-    alt = np.linalg.norm(r) / 1000.0 - 6378.137  # km
+    alt = np.linalg.norm(r)/1000 - 6378.137  # km
+    # print(alt)
+    
     return alt  # 0이 되는 순간 이벤트 발생
 
 altitude_event.terminal = True
-# altitude_event.direction = -1  # 하강 방향에서만 이벤트 발생
+altitude_event.direction = -1  # 하강 방향에서만 이벤트 발생
 
 def _integrate_segment(t_start_rel, t_end_rel, y0_rel, force_model, output_step_sec, rtol, atol, carry_epoch_mjd):
     """Internal helper: integrate one direction segment where y0 matches t_start_rel.
@@ -84,7 +87,7 @@ def propagate_with_scipy(state_epoch, analysis_period, output_step_sec,
             # integrate from 0 -> t_start_rel (negative). Pass t_end_rel = t_start_rel
             sol = _integrate_segment(0.0, t_start_rel, y0, force_model, output_step_sec, rtol, atol, epoch_mjd)
         # print("궤도 전파 완료.")
-        ephemeris_table = np.column_stack((sol.t, np.array(sol.y).T))
+        ephemeris_table = np.column_stack(([state_epoch + timedelta(seconds=sec) for sec in sol.t], np.array(sol.y).T))
         return ephemeris_table
 
     # Case B: interval straddles epoch (e.g., -900 to +900) while y0 at epoch
@@ -111,7 +114,7 @@ def propagate_with_scipy(state_epoch, analysis_period, output_step_sec,
         t_combined = np.concatenate([t_back_rev, sol_fwd.t])
         y_combined = np.concatenate([y_back_rev, sol_fwd.y], axis=1)
         # print("궤도 전파 완료 (양방향 결합).")
-        ephemeris_table = np.column_stack((t_combined, np.array(y_combined).T))
+        ephemeris_table = np.column_stack(([state_epoch + timedelta(seconds=sec) for sec in t_combined], np.array(y_combined).T))
         return ephemeris_table
 
     # Case C: Neither endpoint touches epoch and no straddle with y0 at epoch -> user provided y0 inconsistent
@@ -122,5 +125,5 @@ def propagate_with_scipy(state_epoch, analysis_period, output_step_sec,
         sol = _integrate_segment(t_start_rel, t_end_rel, y0, force_model, output_step_sec, rtol, atol, epoch_mjd)
     else:
         sol = _integrate_segment(t_start_rel, t_end_rel, y0, force_model, output_step_sec, rtol, atol, epoch_mjd)
-    ephemeris_table = np.column_stack((sol.t, np.array(sol.y).T))
+    ephemeris_table = np.column_stack(([state_epoch + timedelta(seconds=sec) for sec in sol.t], np.array(sol.y).T))
     return ephemeris_table

@@ -4,13 +4,31 @@
 # propagated, or distributed except according to the terms contained in the LICENSE file.    
 
 # metaverse/TLEmanager.py
+import os, sys    
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from MISC.DBmanager import DBmanager
 from datetime import datetime, timedelta
-from MISC.constants import constants as const
+import MISC.constants as const
 import math
 import numpy as np
+import requests
 
-class TLEmanger:
+class TLEmanager:
+    def download_and_insert_celestrak_tle(self, url, save_path):
+        """
+        Downloads TLE data from Celestrak, saves to txt, and inserts into DB.
+        :param url: Celestrak TLE URL
+        :param save_path: Path to save the downloaded TLE txt file
+        """
+        print(f"Downloading TLE from {url} ...")
+        response = requests.get(url)
+        response.raise_for_status()
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(response.text)
+        print(f"TLE saved to {save_path}")
+        self.insert_tles_from_file(save_path)
+        print("TLEs inserted into DB.")
     db_manager = None
 
     def __init__(self):
@@ -57,7 +75,6 @@ class TLEmanger:
                 filtered_tles.append((norad, line1, line2, tle_epoch))
         return filtered_tles
     
-
         
     # Insert TLEs from a file into the database
     def insert_tles_from_file(self, filename):
@@ -87,6 +104,7 @@ class TLEmanger:
 
             if i % 10000 == 0:
                 print(f"Inserted TLE for NORAD {norad}: {sat_name}")
+
 
     def compute_apogee_perigee(self, line2):
         """
@@ -148,11 +166,27 @@ class TLEmanger:
         bstar = m * 10 ** e
         return bstar
 
+    def download_tle_and_save(self, fname=datetime.now().strftime("%Y%m%d_%H%M%S"), chk_saveDb=True):
+        celestrak_url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
+        save_path = f"/home/user1229/metaverse/TLEs/celestrak_active_tle_{fname}.txt"
+
+        response = requests.get(celestrak_url)
+        response.raise_for_status()
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(response.text)
+
+        if chk_saveDb:
+            self.insert_tles_from_file(save_path)
+
+        print(f"TLE downloaded and saved to {save_path}")
+
+
 
 if __name__ == "__main__":
-    tle_manager = TLEmanger()
-    # tle_manager.all_tles()  # Fetch all TLEs from the database
-    tle_path = "/home/user1229/metaverse/TLEs/20250815TLE.txt"  # Replace with your TLE file path
-    tle_manager.insert_tles_from_file(tle_path)  # Replace with your TLE file path
 
+
+    tle_manager = TLEmanager()
+    tle_manager.download_tle_and_save()
+    # Example: Download latest active TLEs from Celestrak and insert to DB
+    
     print("end")

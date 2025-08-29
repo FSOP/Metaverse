@@ -102,9 +102,3 @@ if __name__ == "__main__":
     # Plotting
     x_coords_km = ephemeris[:, 1] / 1000.0
     y_coords_km = ephemeris[:, 2] / 1000.0
-
-    # plt.figure(figsize=(10, 10))
-    # plt.plot(x_coords_km, y_coords_km, label=f'Orbit from {start_time.strftime("%Y-%m-%d %H:%M")}')
-    # plt.plot(0, 0, 'bo', markersize=12, label='Earth')
-    # plt.xlabel('X (km) [ICRS]'), plt.ylabel('Y (km) [ICRS]'), plt.title('High-Precision Satellite Orbit')
-    # plt.grid(True), plt.axis('equal'), plt.legend(), plt.show()

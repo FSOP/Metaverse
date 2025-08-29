@@ -1,18 +1,22 @@
 from datetime import datetime, timedelta
-from MISC.TLEmanager import TLEmanger
+from MISC.TLEmanager import TLEmanager
 from CA.propagators import propagators
 from CA.orbitcalculator import orcal
-from MISC.constants import constants as const
 from sgp4.api import Satrec, jday
 from math import acos, atan2, sqrt, pi
+
+import MISC.constants as const
 import numpy as np
 
 
 class CA_filter:
     def __init__(self):
-        self.tle_manager = TLEmanger()
+        self.tle_manager = TLEmanager()
         self.propagator = propagators()
         self.orcal = orcal()  # Placeholder values for name, radius, and period
+        self.critera = {
+            'minium_distance': 10.0,  # km  
+        }
         pass
 
     def filter_BSTAR(self, tle, threshold_bstar):
@@ -224,6 +228,9 @@ class CA_filter:
                         continue
 
                     # 후보 시각 (각 위성의 다음 교차선 통과 시각)
+                    # ref_time: 기준 위성이 교차선(공통 궤도 평면)을 통과하는 예상 시각
+                    # cand_time: 후보 위성이 같은 교차선을 통과하는 예상 시각
+                    # 두 값의 차이가 time_window 이내면 근접 가능성이 있다고 판단
                     cand_ref_time = t + timedelta(seconds=dt1)
                     cand_o_time = t + timedelta(seconds=dt2)
 
@@ -250,25 +257,40 @@ class CA_filter:
 
     def fine_filter_min_distance(self, ref_sat, other_sats, candidates, dt_s=1.0):
         """
-        ref_sat, other_sat: (name?, line1, line2, epoch)
-        candidates: pre-filter 결과 리스트
-        dt_s: fine-sampling 간격 (초)
+        주어진 후보 위성 쌍(candidates)에 대해, 기준(ref) 위성과의 최소 접근 거리를 세밀하게 계산하는 함수.
 
-        반환: list of dict {'type','ref_time','other_time','closest_distance_km','closest_time'}
+        Args:
+            ref_sat: 기준 위성의 TLE 정보 튜플 (name, line1, line2, epoch)
+            other_sats: 비교 대상 위성 리스트 (사용하지 않음, candidates에 포함됨)
+            candidates: coarse filter를 통과한 후보 쌍 리스트. 각 원소는 dict로, 'cand_sat'에 TLE, 'ref_time', 'cand_time' 포함.
+            dt_s: 샘플링 간격(초). 최소 접근 거리 탐색 시 시간 간격.
+
+        Returns:
+            list of dict. 각 dict는 다음 정보를 포함:
+                'sat1_norad': 기준 위성의 NORAD 번호
+                'sat2_norad': 상대 위성의 NORAD 번호
+                'ref_time': 기준 위성의 기준 시각
+                'other_time': 상대 위성의 기준 시각
+                'closest_distance_km': 최소 접근 거리 (km)
+                'closest_time': 최소 접근 거리 발생 시각
         """
         results = []
-        # SGP4
+        # 기준 위성 SGP4 객체 생성
         sat_ref = Satrec.twoline2rv(ref_sat[1], ref_sat[2])
 
         for cand in candidates:
+            # 후보 위성 SGP4 객체 생성
             sat_o = Satrec.twoline2rv(cand["cand_sat"][1], cand["cand_sat"][2])
-            n_steps = 600  # 예시로 10분 간격으로 샘플링
-            times = min(cand["ref_time"], cand["cand_time"]) - timedelta(minutes=1)  # 기준 시각을 중심으로
-            times = [times + timedelta(seconds=i * dt_s) for i in range(n_steps)]
+            n_steps = 600  # 10분간 1초 간격 샘플링
+            # 기준 시각(ref_time, cand_time 중 더 이른 시각)에서 1분 전부터 샘플링
+            times = min(cand["ref_time"], cand["cand_time"]) - timedelta(minutes=1)
+            times = [times + timedelta(seconds=i * dt_s) for i in range(n_steps)]  # 샘플링 시각 리스트 생성
 
             min_dist = np.inf
             t_min = None
-
+            min_s1, min_s2 = [], []
+            ephemeris_sat1 = []
+            ephemeris_sat2 = []
             for t in times:
                 # SGP4 propagate
                 jd, fr = jday(
@@ -279,28 +301,42 @@ class CA_filter:
                     t.minute,
                     t.second + t.microsecond / 1e6,
                 )
-                e1, r1, _ = sat_ref.sgp4(jd, fr)
-                e2, r2, _ = sat_o.sgp4(jd, fr)
+                # 기준 위성 위치 계산
+                e1, r1, v1 = sat_ref.sgp4(jd, fr)
+                # 후보 위성 위치 계산
+                e2, r2, v2 = sat_o.sgp4(jd, fr)
+                # SGP4 에러 발생 시 해당 시각 건너뜀
                 if e1 != 0 or e2 != 0:
-                    continue
+                    continue                
 
-                r1 = np.array(r1)
-                r2 = np.array(r2)
-                d = np.linalg.norm(r1 - r2)
-                if d < min_dist:
+                ephemeris_sat1.append(np.hstack((t, r1, v1)))
+                ephemeris_sat2.append(np.hstack((t, r2, v2)))
+
+                r1 = np.array(r1)  # 기준 위성 위치 벡터
+                r2 = np.array(r2)  # 후보 위성 위치 벡터
+                d = np.linalg.norm(r1 - r2)  # 두 위성 간 거리 계산
+                if d < min_dist:  # 최소 거리 및 해당 시각 갱신
                     min_dist = d
                     t_min = t
+                    min_s1 = np.hstack((r1, v1))
+                    min_s2 = np.hstack((r2, v2))
 
-            if t_min is not None and min_dist < 10.0:  # 예시로 100km 이하
+            # 최소 거리 조건(예: 10km 이하) 만족 시 결과에 추가
+            if t_min is not None and min_dist < self.critera['minium_distance']:
+                prob, rel = orcal.alfano_2d_collision_probability(min_s1, min_s2)
                 results.append(
                     {
                         # 'type': cand['type'],
-                        "sat1_norad": ref_sat[1][2:7].strip(),  # Extract NORAD number from line1
-                        "sat2_norad": cand["cand_sat"][1][2:7].strip(),  # Extract NORAD number from line1
-                        "ref_time": cand["ref_time"],
-                        "other_time": cand["cand_time"],
-                        "closest_distance_km": min_dist,
-                        "closest_time": t_min,
+                        "sat1_norad": ref_sat[1][2:7].strip(),  # 기준 위성 NORAD 번호 추출
+                        "sat2_norad": cand["cand_sat"][1][2:7].strip(),  # 상대 위성 NORAD 번호 추출
+                        "ref_time": cand["ref_time"],  # 기준 위성 기준 시각
+                        "other_time": cand["cand_time"],  # 상대 위성 기준 시각
+                        "closest_distance_km": min_dist,  # 최소 접근 거리
+                        "closest_time": t_min,  # 최소 접근 거리 발생 시각
+                        "sat1_ephem": ephemeris_sat1,
+                        "sat2_ephem": ephemeris_sat2,
+                        "probability": prob,
+                        "rel_vec": rel
                     }
                 )
         return results
@@ -330,8 +366,8 @@ class CA_filter:
         return 1, ref_epoch + timedelta(minutes=t), None
 
 
-from MISC.DBmanager import DBmanager
 
+from MISC.DBmanager import DBmanager
 if __name__ == "__main__":
     CA_filter_instance = CA_filter()
     dbman = DBmanager()

@@ -1,6 +1,6 @@
 import numpy as np
 from math import acos, atan2, sqrt
-from MISC.constants import constants as const
+import MISC.constants as const
 
 
 class orcal:
@@ -141,3 +141,71 @@ class orcal:
 
         dt = dM / n_rad_s
         return float(dt)
+        
+    def alfano_2d_collision_probability(
+        s1, s2,
+        sigma_r=100, sigma_i=300, sigma_c=100,
+        r1_hb=0.005, r2_hb=0.005
+    ):
+        """
+        두 위성의 상태벡터와 불확실성, 하드바디 반경을 받아 encounter plane에서
+        충돌 확률과 상대 벡터를 반환합니다.
+    
+        Args:
+            r1_vec, v1_vec: 위성1의 위치/속도 벡터 (3,)
+            r2_vec, v2_vec: 위성2의 위치/속도 벡터 (3,)
+            sigma_r: radial uncertainty (meters)
+            sigma_i: in-track uncertainty (meters)
+            sigma_c: cross-track uncertainty (meters)
+            r1_hb, r2_hb: 각 위성의 하드바디 반경 (meters)
+    
+        Returns:
+            P_max: 최대 충돌 확률 (float)
+            rel_pos_plane: encounter plane에서의 상대 위치 벡터 (3,)
+        """
+        r1_vec = s1[0:3]
+        v1_vec = s1[3:6]
+        r2_vec = s2[0:3]
+        v2_vec = s2[3:6]       
+
+        # 상대 위치/속도
+        rel_pos = r2_vec - r1_vec
+        rel_vel = v2_vec - v1_vec
+    
+        # encounter plane basis
+        intrack = rel_vel / np.linalg.norm(rel_vel)
+        radial = rel_pos / np.linalg.norm(rel_pos)
+        crosstrack = np.cross(intrack, radial)
+        crosstrack /= np.linalg.norm(crosstrack)
+        R = np.vstack([radial, intrack, crosstrack]).T
+    
+        # 상대 위치를 encounter plane으로 투영
+        rel_pos_plane = R.T @ rel_pos
+        rel_vel_plane = R.T @ rel_vel
+    
+        # 2D separation (in-track, cross-track)
+        sep_intrack = rel_pos_plane[1]
+        sep_crosstrack = rel_pos_plane[2]
+        d_2d = np.sqrt(sep_intrack**2 + sep_crosstrack**2)
+    
+        # 2D covariance ellipse axes
+        a = sigma_i
+        b = sigma_c
+        r_combined = r1_hb + r2_hb
+    
+        # Alfano 2D 충돌 확률 계산
+        if d_2d > r_combined:
+            P_max = np.exp(-0.5 * (d_2d**2) / (a * b)) * (r_combined / (np.sqrt(2 * np.pi * a * b)))
+        else:
+            P_max = 1.0
+
+        return P_max, np.hstack((rel_pos_plane, rel_vel_plane))
+    
+    def cal_inbound(self, ephemeris):
+        r, v = ephemeris[-1][:3], ephemeris[-1][3:]  # 마지막 위치/속도
+        norm_v = np.linalg.norm(v)
+        angle_x = np.arccos(v[0] / norm_v)  
+        angle_y = np.arccos(v[1] / norm_v)  
+        angle_z = np.arccos(v[2] / norm_v)  
+        velocity_x, velocity_y, velocity_z = v[0], v[1], v[2]
+        return angle_x, angle_y, angle_z, velocity_x, velocity_y, velocity_z

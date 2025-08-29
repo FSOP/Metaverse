@@ -146,3 +146,19 @@ class ForceModel:
         dY = np.hstack((v_sat_icrs, total_acceleration))
         
         return dY
+    
+    def get_eop(self):
+        x_pole, y_pole, ut1_utc, lod, dpsi, deps, dx_pole, dy_pole, tai_utc = self.eop_manager.get_eop_values(self.aux_params['Mjd_UTC'])
+        return {
+            'date': self.aux_params['Mjd_UTC'],
+            'x_pole': x_pole,
+            'y_pole': y_pole,
+            'ut1_utc': ut1_utc,
+            'lod': lod,
+            'dpsi': dpsi,
+            'deps': deps,
+            'dx_pole': dx_pole,
+            'dy_pole': dy_pole,
+            'DAT': tai_utc,
+            'DATA_TYPE': 'P'
+        }

@@ -17,8 +17,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
 class HPOP_handle:
     def __init__(self):
-        self.ephem_file = os.path.join(PROJECT_ROOT, 'de440.bsp')
-        self.gravity_file = os.path.join(PROJECT_ROOT, 'EGM2008.gfc')     
+        self.ephem_file = os.path.join(PROJECT_ROOT, 'MISC', 'de440.bsp')
+        self.gravity_file = os.path.join(PROJECT_ROOT, 'MISC', 'EGM2008.gfc')     
         self.AUX_PARAMS = {
             'mass': 1000.0, 'area_drag': 10.0, 'area_solar': 10.0,
             'Cd': 2.2, 'Cr': 1.0, 'n_max': 70, 'm_max': 70,

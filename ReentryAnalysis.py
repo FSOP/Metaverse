@@ -20,7 +20,7 @@ ReentryAnalysis.py
 2. 유효 기간 내 TLE만 필터링
 3. 궤도(perigee) 기준 필터링
 4. Bstar(드래그) 기준 필터링
-5. SGP4로 각 위성의 170km 도달 시점/상태벡터 계산
+5. SGP4로 각 위성의 200km 도달 시점/상태벡터 계산
 6. HPOP으로 각 위성의 지표면 추락 시점/위치 계산
 7. 결과를 dictionary로 저장 및 요약 출력
 
@@ -28,7 +28,7 @@ ReentryAnalysis.py
 - 각 위성별:
     - NORAD 번호
     - SGP4 분석 코드(0: 정상, 1: 오류, 2: 이미 추락)
-    - 170km 도달 시각/상태벡터
+    - 200km 도달 시각/상태벡터
     - HPOP 기반 지표면 추락 시각/위치
 - 전체 요약: result_impact 리스트
 
@@ -42,119 +42,120 @@ ReentryAnalysis.py
 """
 
 import os, sys
+import MISC.Structurer as structer
+import numpy as np
+
 from datetime import datetime, timedelta
 from HPOP.force_models import ForceModel
-from MISC.TLEmanager import TLEmanger
+from MISC.TLEmanager import TLEmanager
+from MISC.DBmanager import DBmanager
 from CA.CA_filter import CA_filter
 from CA.RA_ephemeris import propagate_hpop_to_surface
-
+from CA.orbitcalculator import orcal
 from HPOP.force_models import ForceModel
-from HPOP.propagator import propagate_with_scipy
 from HPOP.eop import EOPManager
 from HPOP.astroephemeris import EphemerisManager
 from HPOP.gravity_models import GravityModel # 새로 만든 클래스를 import
 from HPOP.atmosphere import AtmosphereModel
 
 
-
-ALTITUDE_THRESHOLD = 170.0  # km
+ALTITUDE_THRESHOLD = 200.0  # km
 BSTAR_THRESHOLD = 0.05
 
 def main():
-    tle_manager = TLEmanger()
-    CA_manager = CA_filter()   
+    tle_manager = TLEmanager() # TLEmanager: TLE 데이터 관리 및 필터링
+    CA_manager = CA_filter() # CA_filter: 궤도 필터링 및 SGP4 기반 분석
+    db_man = DBmanager() # DBmanager: 위성 정보 DB 연동
+    or_cal = orcal() # orcal: 궤도 계산기
+
+    total_res = []
 
     start_epoch = datetime.now()
+        # 분석 시작/종료 시각 설정 (현재~10일 후)
     end_epoch = start_epoch + timedelta(days=10)
 
     # Step 1: Load TLEs
+        # 전체 TLE 데이터 불러오기
     all_tles = tle_manager.all_tles()
 
     # Step 2: Filter outdated TLEs
+        # 유효 기간 내 TLE만 필터링 (pad_days: 여유 기간)
     tles = tle_manager.filter_outdated_tles(all_tles, start_epoch, end_epoch, pad_days=10)
 
     # Step 3: Filter by apogee/perigee
+    # 궤도(perigee) 기준 필터링 (저고도 위성만 선별)
     tles = CA_manager.filter_perigee(tles, ALTITUDE_THRESHOLD)
 
     # Step 4: Filter by Bstar
+        # Bstar(드래그) 기준 필터링 (대기저항 큰 위성만 선별)
     tles = CA_manager.filter_BSTAR(tles, BSTAR_THRESHOLD)  # example value
 
     print(f"Number of whole TLE: {len(all_tles)} Filtered TLEs: {len(tles)}")
     pass
 
     # Step 5: For each filtered TLE, analyze reentry
-    results = []
+    filtered_result = []
     for tle in tles:
         sat = tle
+            # SGP4로 ALTITUDE_THRESHOLD(저고도) 도달 시각/상태벡터 계산
         code, reentry_time, state_vector = CA_manager.get_state_at_altitude(sat, start_epoch, ALTITUDE_THRESHOLD, 30, 10)
-        result = {
+        reenter_sat = {
             "norad": sat[0],
             "code": code,  # 0: success, 1: error, 2: already-decayed
             "reentry_time": reentry_time,
             "state_vector": state_vector
         }
-        results.append(result)
+        filtered_result.append(reenter_sat)
         print(f"Satellite {sat[0]}: code={code}, reentry_time={reentry_time}, state={state_vector}")
 
-
-    # HPOP ForceModel 객체 생성 (초기화는 HPOP_example.py 참고)
-    CONSTANTS = {
-    'GM_Earth': 3.986004418e14,     # m^3/s^2
-    'GM_Sun': 1.32712440018e20,
-    'GM_Moon': 4.9048695e12,
-    'R_Earth': 6378137.0,            # 지구 평균 반경 [m]
-    'AU': 149597870700.0,            # 천문단위 [m]
-    'P_Sol': 4.56e-6,                # 1 AU에서의 태양 압력 [N/m^2]
-    'omega_Earth': 7.292115e-5       # 지구 자전 각속도 [rad/s]
-    }
-
+    # AUX_PARAMS: HPOP에서 사용할 외력/환경 모델 파라미터
     AUX_PARAMS = {
     'mass': 1000.0, 'area_drag': 10.0, 'area_solar': 10.0,
     'Cd': 2.35, 'Cr': 1.0, 'n_max': 70, 'm_max': 70,
-    'sun': False, 'moon': False, 'sRad': False, 'drag': True
+    'sun': False, 'moon': False, 'sRad': False, 'drag': True        
     }
 
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    # 프로젝트 루트 경로 및 외부 파일 경로 지정
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-    ephem_file = os.path.join(PROJECT_ROOT, 'de440.bsp')    
-    gravity_file = os.path.join(PROJECT_ROOT, 'EGM2008.gfc')
-
-
-    eop_manager = EOPManager()
-    ephem_manager = EphemerisManager(ephem_file)
-    gravity_model = GravityModel(gravity_file, n_max=AUX_PARAMS['n_max'], m_max=AUX_PARAMS['m_max'])
-    atmosphere_model = AtmosphereModel()
+    ephem_file = os.path.join(PROJECT_ROOT, 'MISC', 'de440.bsp')        
+    gravity_file = os.path.join(PROJECT_ROOT, 'MISC', 'EGM2008.gfc')
 
     force_model = ForceModel(
-        consts=CONSTANTS, 
-        aux_params=AUX_PARAMS, 
-        eop_manager=eop_manager,
-        ephem_manager=ephem_manager,
-        gravity_model=gravity_model,
-        atmosphere_model=atmosphere_model
+        aux_params=AUX_PARAMS,
+        eop_manager=EOPManager(),
+        ephem_manager=EphemerisManager(ephem_file),
+        gravity_model=GravityModel(gravity_file, n_max=AUX_PARAMS['n_max'], m_max=AUX_PARAMS['m_max']),
+        atmosphere_model=AtmosphereModel()
+        # ForceModel: HPOP에서 사용할 외력/환경 모델 객체 생성
     )
 
-    result_impact = []
-    for result in results:
-        if result['code'] == 0 and result['state_vector'] is not None:
-            print(f"Propagating satellite {result['norad']} to surface...")
+    # 1차 필터링한 결과 나온 event들을 정밀 궤도전파기로 정밀분석
+    for reenter_sat in filtered_result:
+        if reenter_sat['code'] == 0 and reenter_sat['state_vector'] is not None:
             # HPOP을 이용해 위성이 지표면에 도달할 때까지 propagate
-            impact_time, impact_location = propagate_hpop_to_surface(result['state_vector'], result['reentry_time'], force_model)
-            result['impact_time'] = impact_time # 지표면 도달 시간
-            result['impact_location'] = impact_location # 지표면 도달 위치
+            impact_time, impact_location, ephemeris = propagate_hpop_to_surface(reenter_sat['state_vector'], reenter_sat['reentry_time'], force_model)
 
-            result_impact.append({
-                "norad": result['norad'],
-                "impact_time": impact_time,
-                "impact_location": impact_location
-            })
-            print(f"Satellite {result['norad']} impact at {impact_location} on {impact_time}")
-            print(f"Number of Total events: {len(results)} / this event number: {len(result_impact)}")
+            # 위성에 대한 정보
+            sat_info = db_man.get_SATCAT_info(reenter_sat['norad'])
+            ephem1 = structer.reassemble_orbit(ephemeris)
+            SAT1 = structer.SAT_struc(sat_info['NORAD_CAT_ID'], sat_info['OBJECT_NAME'], sat_info['OBJECT_TYPE'], sat_info['RCS'], ephem1, 0, "")
 
-    # Example: print summary
-    print(f"\nReentry analysis summary:")
-    for res in result_impact:
-        print(res)
+            inst_eop = force_model.get_eop()
+            inst_eop['Date'] = start_epoch.strftime('%Y%m%d')
+            inbound_info = structer.inbound_info(or_cal.cal_inbound(ephemeris), inst_eop)
+
+            total_res.append(structer.crash(
+                crash_id = f"{impact_time.strftime('%Y%m%d_%H%M%S')}_{reenter_sat['norad']}",
+                creation_date = datetime.now(),
+                start_time = reenter_sat['reentry_time'],
+                SAT_info = SAT1,
+                inbound_info = inbound_info,
+                orbit_crash = ephem1,
+                time_crash = impact_time,
+                point_crash = impact_location,
+                prob_crash = None
+            ))
+
 
 if __name__ == "__main__":
     main()
