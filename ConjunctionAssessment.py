@@ -36,6 +36,7 @@ from MISC.DBmanager import DBmanager
 from MISC.TLEmanager import TLEmanager
 from CA.CA_filter import CA_filter
 from datetime import datetime, timedelta
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import MISC.Structurer as structer
 
 # ==========================
@@ -51,10 +52,14 @@ tle_manager = TLEmanager()
 CA_filter = CA_filter()
 db_manager = DBmanager()
 
+
 # Step 2: 전체 TLE 개수 및 데이터 조회
 count_tle = db_manager.get_tle_count()  # DB 내 TLE 총 개수
 tle_all = tle_manager.all_tles()         # 모든 TLE 데이터 로드
 print(f"Total TLE records in database: {count_tle}") 
+
+# Step 2-1: primary 위성 리스트 DB에서 불러오기 (DBmanager 메서드 사용)
+primary_norad_list = db_manager.get_primary_norad_list()
 
 # Step 3: 분석 기준 시각 설정
 now_epoch = datetime.now()             # 현재 시각을 기준 epoch로 사용
@@ -67,61 +72,68 @@ filtered_tle = tle_manager.filter_outdated_tles(
 )
 print(f"1st Filtered TLE records: {len(filtered_tle)}")  # 필터링 후 TLE 개수 출력
 
-# Step 5: 각 TLE(위성)별로 근접 위험 분석 수행
-for i in range(len(filtered_tle)):
-    ref_line2 = filtered_tle[i][2]  # 기준 위성의 TLE line2 (고도 비교용)
+# Step 4-1: primary 위성만 추출
+primary_tles = [tle for tle in filtered_tle if tle[0] in primary_norad_list]
+print(f"Primary TLE records: {len(primary_tles)}")
 
-    # Step 5-1: 2차 필터 - 고도 기준 근접 후보 추림
-    remain_tle = CA_filter.filter_altitude(filtered_tle[i+1:], ref_line2, pad=0)
-    # print(f"2nd Filtered TLE records: {len(remain_tle)}")  # 고도 필터링 후 개수
 
-    # Step 5-2: 3차 필터 - 궤도 경로 유사성 기준 후보 추림
+# ==========================
+# 함수 정의 (상단에 위치)
+# ==========================
+def process_primary(i):
+    db_manager = DBmanager()  # 각 프로세스마다 새로 생성
+    ref_line2 = primary_tles[i][2]
+    remain_tle = CA_filter.filter_altitude(filtered_tle, ref_line2, pad=0)
     remain_tle = CA_filter.filter_orbitpath(remain_tle, ref_line2)
-    # print(f"3rd Filtered TLE records: {len(remain_tle)}")  # 궤도 경로 필터링 후 개수
-
-    # Step 5-3: 4차 필터 - 시간적 근접성 기준 후보 추림
-    ref_sat = filtered_tle[i]  # 기준 위성 정보
+    ref_sat = primary_tles[i]
     remain_events = CA_filter.filter_time(
         ref_sat, remain_tle, analysis_days=10, time_window=300.0, d_tol_km=100.0
     )
-    # print(f"4th Filtered TLE records: {len(remain_tle)}")  # 시간 필터링 후 개수
-
-    # Step 5-4: 5차 필터 - 실제 최소 접근 거리 기반 근접 위험 평가
     ca_res = CA_filter.fine_filter_min_distance(
         ref_sat, remain_tle, remain_events, dt_s=1.0
     )
-    # print(f"5th Filtered TLE records: {len(ca_res)}")  # 근접 위험 평가 후 개수
-
-    # Step 6: 근접 위험 결과를 구조화 및 DB 저장 준비
+    results = []
     for r in ca_res:
-        # 위성 궤도 정보 복원
         orbit1 = structer.reassemble_orbit(r['sat1_ephem'])
         orbit2 = structer.reassemble_orbit(r['sat2_ephem'])
         sat1_info = db_manager.get_SATCAT_info(r['sat1_norad'])
         sat2_info = db_manager.get_SATCAT_info(r['sat2_norad'])
-        # 위성 구조체 생성
         SAT_1 = structer.SAT_struc(
             r['sat1_norad'], sat1_info["OBJECT_NAME"], sat1_info["OBJECT_TYPE"], 0, orbit1, 0, sat1_info["RCS"]
         )
         SAT_2 = structer.SAT_struc(
             r['sat2_norad'], sat2_info['OBJECT_NAME'], sat2_info['OBJECT_TYPE'], 0, orbit2, 0, sat2_info['RCS']
         )
-
-        # 근접 위험(COLLI) 정보 구조화
         COLLI = {
-            "CDM_ID"        : f"{r['sat1_norad']}_{r['sat2_norad']}_{r['closest_time']}",  # 고유 ID
+            "CDM_ID"        : f"{r['sat1_norad']}_{r['sat2_norad']}_{r['closest_time']}",
             "Creation_date" : datetime.now(),
-            "TCA"           : r['closest_time'],           # 근접 시각
-            "MIN_RNG"       : r['closest_distance_km'],    # 최소 접근 거리
-            "probability"   : r['probability'],            # 충돌 확률
-            "SAT_1"         : SAT_1,                       # 위성1 정보
-            "SAT_2"         : SAT_2,                       # 위성2 정보
+            "TCA"           : r['closest_time'],
+            "MIN_RNG"       : r['closest_distance_km'],
+            "probability"   : r['probability'],
+            "SAT_1"         : SAT_1,
+            "SAT_2"         : SAT_2,
             "COLLI_Info"    : structer.COLLI_Info(
                 r['rel_vec'][0:3], r['rel_vec'][3:6]
-            )  # 상대 위치/속도 정보
+            )
         }
-
-        # 실제 DB 저장 예시 (주석 처리)
         db_manager.insert_CA(
             r['sat1_norad'], r['sat2_norad'], sat1_info['OBJECT_NAME'], sat2_info['OBJECT_NAME'], r['closest_time'], r['closest_distance_km'], r['probability']
         )
+        results.append(COLLI)
+    return results
+
+
+# ==========================
+# 메인 실행 로직 (하단에 위치)
+# ==========================
+if __name__ == "__main__":
+    # 병렬처리 적용: 각 primary object별로 process_primary 함수 실행
+    results_all = []
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(process_primary, i) for i in range(len(primary_tles))]
+        for future in as_completed(futures):
+            res = future.result()
+            results_all.extend(res)
+
+    # 분석이 모두 끝난 후 마지막 분석 시간 기록 (system_status 테이블에 저장)
+    db_manager.update_last_analysis_time(datetime.now())

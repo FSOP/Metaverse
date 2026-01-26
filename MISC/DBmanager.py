@@ -2,7 +2,7 @@ import mariadb
 import requests
 import csv
 
-class DBmanager:
+class DBmanager: 
     user       = "mverse"
     password   = "dlstn"
     host       = "localhost"
@@ -144,7 +144,7 @@ class DBmanager:
             satcat_row["ORBIT_TYPE"]
         ))
         self.conn.commit()
-    
+        
     def get_SATCAT_info(self, norad_id):
         query = "SELECT OBJECT_NAME, OBJECT_ID, NORAD_CAT_ID, OBJECT_TYPE, OPS_STATUS_CODE, OWNER, LAUNCH_DATE, LAUNCH_SITE, DECAY_DATE, PERIOD, INCLINATION, APOGEE, PERIGEE, RCS, DATA_STATUS_CODE, ORBIT_CENTER, ORBIT_TYPE FROM SATCAT WHERE NORAD_CAT_ID = ?"
         self.curr.execute(query, (norad_id,))
@@ -153,6 +153,41 @@ class DBmanager:
             return None
         columns = ["OBJECT_NAME", "OBJECT_ID", "NORAD_CAT_ID", "OBJECT_TYPE", "OPS_STATUS_CODE", "OWNER", "LAUNCH_DATE", "LAUNCH_SITE", "DECAY_DATE", "PERIOD", "INCLINATION", "APOGEE", "PERIGEE", "RCS", "DATA_STATUS_CODE", "ORBIT_CENTER", "ORBIT_TYPE"]
         return dict(zip(columns, row))
+
+    def update_last_analysis_time(self, dt):
+        """
+        system_status 테이블의 마지막 분석 시간(last_analysis_time)을 dt로 업데이트
+        만약 row가 없으면 새로 insert, 있으면 update
+        """
+        self.curr.execute("SELECT id FROM system_status LIMIT 1")
+        row = self.curr.fetchone()
+        if row:
+            self.curr.execute("UPDATE system_status SET last_analysis_time = ? WHERE id = ?", (dt, row[0]))
+        else:
+            # last_tle_update에 NULL이 들어가면 에러 발생하므로 dt와 동일하게 저장
+            self.curr.execute("INSERT INTO system_status (last_tle_update, last_analysis_time) VALUES (?, ?)", (dt, dt))
+        self.conn.commit()
+    
+    def update_last_tle_update(self, dt):
+        """
+        system_status 테이블의 마지막 TLE 업데이트 시간(last_tle_update)을 dt로 업데이트
+        만약 row가 없으면 새로 insert, 있으면 update
+        """
+        self.curr.execute("SELECT id FROM system_status LIMIT 1")
+        row = self.curr.fetchone()
+        if row:
+            self.curr.execute("UPDATE system_status SET last_tle_update = ? WHERE id = ?", (dt, row[0]))
+        else:
+            self.curr.execute("INSERT INTO system_status (last_tle_update, last_analysis_time) VALUES (?, ?)", (dt, None))
+        self.conn.commit()
+    
+    def get_primary_norad_list(self):
+            """
+            primary_satellites 테이블에서 norad_cat_id 리스트 반환
+            """
+            query = "SELECT norad_cat_id FROM primary_satellites"
+            self.curr.execute(query)
+            return [row[0] for row in self.curr.fetchall()]
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.curr.close()
