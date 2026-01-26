@@ -64,9 +64,9 @@ class DBmanager:
         self.curr.execute(query)
         return self.curr.fetchone()[0]
     
-    def insert_CA(self, norad1, norad2, name1, name2, tca, closest_distance_km):
+    def insert_CA(self, norad1, norad2, name1, name2, tca, closest_distance_km, probability=0.0):
         query = "INSERT INTO CA (sat1_norad, sat1_name, sat2_norad, sat2_name, tca, miss_distance, probability) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        self.curr.execute(query, (norad1, name1, norad2, name2, tca, closest_distance_km, 0.0))
+        self.curr.execute(query, (norad1, name1, norad2, name2, tca, closest_distance_km, probability))
         self.conn.commit()
     
     def download_and_insert_satcat(self):

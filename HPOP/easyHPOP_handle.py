@@ -47,12 +47,12 @@ class HPOP_handle:
         # ForceModel is reused; propagate_with_scipy will update aux_params['Mjd_UTC'] as needed
         ephemeris = propagate_with_scipy(
             state_epoch, analysis_period, step_size,
-            y_initial, self.force_model, rtol=1e-12, atol=1e-12
-        )
+            y_initial, self.force_model, rtol=1e-6, atol=1e-6
+            )
 
-        ep = [state_epoch + timedelta(seconds=sec) for sec in ephemeris[:,0]]
-        ephemeris = np.delete(ephemeris, 0, axis=1)
-        ephemeris = np.hstack((np.array(ep).reshape(-1, 1), ephemeris))
+        # ep = [state_epoch + timedelta(seconds=sec) for sec in ephemeris[:,0]]
+        # ephemeris = np.delete(ephemeris, 0, axis=1)
+        # ephemeris = np.hstack((np.array(ep).reshape(-1, 1), ephemeris))
         return ephemeris
         
 

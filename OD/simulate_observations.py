@@ -1,3 +1,15 @@
+"""
+simulate_observations.py
+-------------------------------------------------------------
+위성 궤도(J2 효과만 고려) 하루치 propagate 후,
+지상국(site)과의 access(관측 가능) 구간을 찾고,
+각 access 구간 앞/뒤로 정밀(HPOP 등) propagate하여
+실제 관측 데이터(azimuth, elevation, range)를 예측하는 코드
+주요 함수:
+ - simulate_observations: 관측 시뮬레이션 메인 함수
+ - Observation 클래스: propagate, access window, AER 계산 등
+-------------------------------------------------------------
+"""        
 import os
 import sys
 project_root = os.path.dirname(os.path.dirname(__file__))
@@ -40,7 +52,7 @@ if __name__ == "__main__":
     start_time = datetime(2025, 8, 17, 23, 20, 00)
     start_time = datetime(2025, 8, 18, 6, 0, 0)
     epochs = [start_time, start_time + timedelta(days=1/24)]
-    SWITCH_WRITE_DB = 0
+    SWITCH_WRITE_DB = 1
 
     sat = {
         'sma': 6878.14,

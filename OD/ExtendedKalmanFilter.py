@@ -38,8 +38,8 @@ class ExtendedKalmanFilter:
         self.CC = coordinate_converter()
         self.site = site
         self.site_ecef = self.CC.geodetic_to_ecef(site[0], site[1], site[2])  # 관측소 위치를 ECEF로 변환
-        self.sigma_ra = 0.01 * np.pi / 180  # 0.01 arcseconds to radians
-        self.sigma_dec = 0.01 * np.pi / 180 # 0.01 arcseconds to radians
+        self.sigma_ra = 0.1   # 0.1 degrees
+        self.sigma_dec = 0.1  # 0.1 degrees
 
 
     def run(self):
@@ -47,7 +47,7 @@ class ExtendedKalmanFilter:
         print("\n=== RA/Dec 관측치 vs 예측치 시간대별 비교 ===")
         print(f"{'Epoch':<25} {'RA_obs(deg)':>12} {'RA_pred(deg)':>14} {'RA_error':>12} {'Dec_obs(deg)':>14} {'Dec_pred(deg)':>14} {'Dec_error':>12}")
         for i in range(len(self.obs_data)):
-            Y_old = self.Y.copy()
+            # Y_old = self.Y.copy()
             LTC = self.LTCs[i]
             U = self.Us[i]
             epoch = self.obs_data[i, 0]
@@ -55,12 +55,13 @@ class ExtendedKalmanFilter:
             # 적분 시간 계산 (초 단위)
             t = (epoch - prev_epoch).total_seconds()
             prev_epoch = epoch
+            
 
             # ForceModel 시간 업데이트
             self.FM.force_model.aux_params['Mjd_UTC'] = Time(epoch).mjd
 
             # 상태 예측
-            x_pred, Phi = self.process_model(Y_old, t, U)
+            x_pred, Phi = self.process_model(self.Y, t, U)
             # print(f"[EKF][run] Predicted state (epoch={epoch}): {x_pred}")
             self.Y = x_pred.copy()
             self.P = self.timeupdate(self.P, Phi)
@@ -69,6 +70,10 @@ class ExtendedKalmanFilter:
 
             # 관측소 위치를 ECEF → ECI로 변환
             rs_icrf = self.CC.ecef_to_eci(self.site_ecef, epoch)
+
+            # print(f"[EKF][run] Predicted state (epoch={epoch}): {rs_icrf}")
+            # print(f"[EKF][run] x_pred : {x_pred}")
+
             # 관측소 기준 LOS 벡터
             los_vec = x_pred[:3] - rs_icrf
             # LOS 벡터로 RA/Dec 계산
@@ -85,9 +90,9 @@ class ExtendedKalmanFilter:
             print(f"{str(epoch):<25} {ra_obs:>12.6f} {np.degrees(ra_pred):>14.6f} {ra_error:>12.6f} {dec_obs:>14.6f} {np.degrees(dec_pred):>14.6f} {dec_error:>12.6f}")
 
             # 관측값
-            z = np.array([ra_obs, dec_obs])  # [deg, deg]
-            g = np.array([np.degrees(ra_pred), np.degrees(dec_pred)])  # 예측값 [deg, deg]
-            s = np.array([self.sigma_ra, self.sigma_dec]) * 180/np.pi  # 관측 노이즈 [deg, deg]
+            z = np.array([ra_obs, dec_obs]) * np.pi/180     # [deg, deg]
+            g = np.array([ra_pred, dec_pred])               # 예측값 [deg, deg]
+            s = np.array([self.sigma_ra, self.sigma_dec]) * np.pi/180  # 관측 노이즈 [deg, deg]
             G = np.vstack([dRa_ds, dDec_ds])  # (2, 3) → (2, 6)로 확장 필요
 
             # G를 6차원으로 확장 (속도에 대해 0)
@@ -98,11 +103,10 @@ class ExtendedKalmanFilter:
             _, self.Y, self.P = self.meas_update(self.Y, z, g, s, G_full, self.P, 6)
 
             ###            # 상태 예측
-            x_pred, Phi = self.process_model(Y_old, t, U)
+            # x_pred, Phi = self.process_model(Y_old, t, U)
 
-            self.Y = x_pred.copy()
-            self.P = self.timeupdate(self.P, Phi)
-            
+            # self.Y = x_pred.copy()
+            # self.P = self.timeupdate(self.P, Phi)            
 
             # ephemeris 저장
             self.ephemeris.append([epoch, self.Y.copy()])
@@ -137,6 +141,12 @@ class ExtendedKalmanFilter:
         K = P @ G.T @ np.linalg.inv(Inv_W + G @ P @ G.T)
         x = x + K @ (z - g)
         P = (np.eye(n) - K @ G) @ P
+
+        # print("잔차(z-g):", z-g)
+        # print("칼만 이득(K):", K)
+        # print("업데이트 전 상태(self.Y):", self.Y)
+        # print("업데이트 후 상태(x_new):", x)
+
         return K, x, P
 
     # 시간 업데이트
@@ -146,7 +156,7 @@ class ExtendedKalmanFilter:
 
     def measurement_model(self, y_old, dt):
         # 관측 모델 정의
-        sol = solve_ivp(self.FM.force_model, [0, dt], y_old.flatten(), method='DOP853', rtol=1e-10, atol=1e-12)
+        sol = solve_ivp(self.FM.force_model, [0, dt], y_old.flatten(), method='DOP853', rtol=1e-6, atol=1e-6)
         # self.Y = sol.y[:, -1]
         return sol.y[:, -1]  # 위치 정보만 관측한다고 가정
 
@@ -171,13 +181,14 @@ class ExtendedKalmanFilter:
         y_initial = x.flatten()
         ephemeris = propagate_with_scipy(
             epoch_dt, analysis_period, float(dt),
-            y_initial, self.FM.force_model, rtol=1e-10, atol=1e-12
+            y_initial, self.FM.force_model, rtol=1e-6, atol=1e-6
         )
-        if ephemeris.shape[0] == 0 or np.any(np.isnan(ephemeris)) or np.any(np.isinf(ephemeris)):
+        if ephemeris.shape[0] == 0:
             print("[EKF][process_model] propagate_with_scipy returned empty or invalid ephemeris! Using previous state.")
             x_new = x.flatten()
         else:
             x_new = ephemeris[-1, 1:7]  # 마지막 상태벡터
+            x_new = np.array(x_new, dtype=float)  # float 배열로 변환
             if np.any(np.isnan(x_new)) or np.any(np.isinf(x_new)): #or np.linalg.norm(x_new) > 1e6:
                 print(f"[EKF][process_model] x_new has NaN/Inf/overflow! x_new={x_new}, using previous state.")
                 x_new = x.flatten()
@@ -245,6 +256,10 @@ if __name__ == "__main__":
         'alt': site[2]
     }
     ra_list, dec_list, LTCs, Us = cc.aer_to_radec(az_list, el_list, sitet, epoch_list)
+    
+    # RADEC 변환 검증
+    for i in range(len(ra_list)):
+        print(f"{str(epoch_list[i]):<25} {az_list[i]:>8.3f} {el_list[i]:>8.3f} -> {ra_list[i]:>12.6f} {dec_list[i]:>12.6f}")
 
     # EKF 초기 상태 및 공분산 설정 (예시)
     # 초기 상태 추정: 첫 관측 epoch, 첫 관측 위치/속도 (실제 초기값으로 교체 필요)
@@ -253,7 +268,7 @@ if __name__ == "__main__":
     # IOD 등을 사용하여 초기 상태 추정
     initial_state, _ = iod_main("20250818_060440_061654")
     initial_state = np.hstack((initial_state['r2_epoch'], initial_state['r2'], initial_state['v2']))
-    initial_covariance = np.eye(6) * 1e-2
+    initial_covariance = np.eye(6) * 1e+8
 
     # EKF 객체 생성 및 실행
     obs_data = np.hstack((obs_data[:,0].reshape(-1,1), np.array(ra_list).reshape(-1,1), np.array(dec_list).reshape(-1,1)))

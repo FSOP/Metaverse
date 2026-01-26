@@ -49,9 +49,10 @@ TLE_AGE_LIMIT = 10          # [days] TLE 유효기간
 # Step 1: TLE 데이터 관리 객체 및 근접 필터링 객체 생성
 tle_manager = TLEmanager()
 CA_filter = CA_filter()
+db_manager = DBmanager()
 
 # Step 2: 전체 TLE 개수 및 데이터 조회
-count_tle = DBmanager().get_tle_count()  # DB 내 TLE 총 개수
+count_tle = db_manager.get_tle_count()  # DB 내 TLE 총 개수
 tle_all = tle_manager.all_tles()         # 모든 TLE 데이터 로드
 print(f"Total TLE records in database: {count_tle}") 
 
@@ -96,12 +97,14 @@ for i in range(len(filtered_tle)):
         # 위성 궤도 정보 복원
         orbit1 = structer.reassemble_orbit(r['sat1_ephem'])
         orbit2 = structer.reassemble_orbit(r['sat2_ephem'])
+        sat1_info = db_manager.get_SATCAT_info(r['sat1_norad'])
+        sat2_info = db_manager.get_SATCAT_info(r['sat2_norad'])
         # 위성 구조체 생성
         SAT_1 = structer.SAT_struc(
-            r['sat1_norad'], "SAT1_NAME", "SAT_TYPE", 0, orbit1, 0, "MASS"
+            r['sat1_norad'], sat1_info["OBJECT_NAME"], sat1_info["OBJECT_TYPE"], 0, orbit1, 0, sat1_info["RCS"]
         )
         SAT_2 = structer.SAT_struc(
-            r['sat2_norad'], "SAT2_NAME", "SAT_TYPE", 0, orbit2, 0, "MASS"
+            r['sat2_norad'], sat2_info['OBJECT_NAME'], sat2_info['OBJECT_TYPE'], 0, orbit2, 0, sat2_info['RCS']
         )
 
         # 근접 위험(COLLI) 정보 구조화
@@ -119,6 +122,6 @@ for i in range(len(filtered_tle)):
         }
 
         # 실제 DB 저장 예시 (주석 처리)
-        # DBmanager().insert_CA(
-        #     r['sat1_norad'], r['sat2_norad'], "NONAME1", "NONAME2", r['closest_time'], r['closest_distance_km']
-        # )
+        db_manager.insert_CA(
+            r['sat1_norad'], r['sat2_norad'], sat1_info['OBJECT_NAME'], sat2_info['OBJECT_NAME'], r['closest_time'], r['closest_distance_km'], r['probability']
+        )

@@ -75,11 +75,11 @@ def main():
     end_epoch = start_epoch + timedelta(days=10)
 
     # Step 1: Load TLEs
-        # 전체 TLE 데이터 불러오기
+    # 전체 TLE 데이터 불러오기
     all_tles = tle_manager.all_tles()
-
+ 
     # Step 2: Filter outdated TLEs
-        # 유효 기간 내 TLE만 필터링 (pad_days: 여유 기간)
+    # 유효 기간 내 TLE만 필터링 (pad_days: 여유 기간)
     tles = tle_manager.filter_outdated_tles(all_tles, start_epoch, end_epoch, pad_days=10)
 
     # Step 3: Filter by apogee/perigee

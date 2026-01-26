@@ -18,8 +18,8 @@ class getFM:
             }
     def __init__(self, AUX_PARAMS=aux):
         PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
-        self.ephem_file = os.path.join(PROJECT_ROOT, 'de440.bsp')
-        self.gravity_file = os.path.join(PROJECT_ROOT, 'EGM2008.gfc')     
+        self.ephem_file = os.path.join(PROJECT_ROOT, 'MISC', 'de440.bsp')
+        self.gravity_file = os.path.join(PROJECT_ROOT, 'MISC', 'EGM2008.gfc')
         if AUX_PARAMS is not None:
             self.AUX_PARAMS = AUX_PARAMS
         else:
