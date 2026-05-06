@@ -144,57 +144,73 @@ class orcal:
         
     def alfano_2d_collision_probability(
         s1, s2,
-        sigma_r=100, sigma_i=300, sigma_c=100,
+        sigma_r=0.1, sigma_i=0.3, sigma_c=0.1,
         r1_hb=0.005, r2_hb=0.005
     ):
         """
         두 위성의 상태벡터와 불확실성, 하드바디 반경을 받아 encounter plane에서
         충돌 확률과 상대 벡터를 반환합니다.
-    
+
+        All inputs in km (positions/velocities from SGP4 are already in km and km/s).
+
         Args:
-            r1_vec, v1_vec: 위성1의 위치/속도 벡터 (3,)
-            r2_vec, v2_vec: 위성2의 위치/속도 벡터 (3,)
-            sigma_r: radial uncertainty (meters)
-            sigma_i: in-track uncertainty (meters)
-            sigma_c: cross-track uncertainty (meters)
-            r1_hb, r2_hb: 각 위성의 하드바디 반경 (meters)
-    
+            s1: 위성1의 상태벡터 [r1,r2,r3,v1,v2,v3] (km, km/s)
+            s2: 위성2의 상태벡터 [r1,r2,r3,v1,v2,v3] (km, km/s)
+            sigma_r: radial uncertainty (km) — default 0.1 km = 100 m
+            sigma_i: in-track uncertainty (km) — default 0.3 km = 300 m
+            sigma_c: cross-track uncertainty (km) — default 0.1 km = 100 m
+            r1_hb, r2_hb: 각 위성의 하드바디 반경 (km) — default 0.005 km = 5 m
+
         Returns:
             P_max: 최대 충돌 확률 (float)
-            rel_pos_plane: encounter plane에서의 상대 위치 벡터 (3,)
+            rel_vector: encounter plane에서의 상대 위치/속도 벡터 (6,)
         """
-        r1_vec = s1[0:3]
-        v1_vec = s1[3:6]
-        r2_vec = s2[0:3]
-        v2_vec = s2[3:6]       
+        r1_vec = np.asarray(s1[0:3], dtype=float)
+        v1_vec = np.asarray(s1[3:6], dtype=float)
+        r2_vec = np.asarray(s2[0:3], dtype=float)
+        v2_vec = np.asarray(s2[3:6], dtype=float)
 
         # 상대 위치/속도
         rel_pos = r2_vec - r1_vec
         rel_vel = v2_vec - v1_vec
-    
-        # encounter plane basis
-        intrack = rel_vel / np.linalg.norm(rel_vel)
-        radial = rel_pos / np.linalg.norm(rel_pos)
-        crosstrack = np.cross(intrack, radial)
-        crosstrack /= np.linalg.norm(crosstrack)
-        R = np.vstack([radial, intrack, crosstrack]).T
-    
-        # 상대 위치를 encounter plane으로 투영
-        rel_pos_plane = R.T @ rel_pos
-        rel_vel_plane = R.T @ rel_vel
-    
-        # 2D separation (in-track, cross-track)
-        sep_intrack = rel_pos_plane[1]
-        sep_crosstrack = rel_pos_plane[2]
-        d_2d = np.sqrt(sep_intrack**2 + sep_crosstrack**2)
-    
-        # 2D covariance ellipse axes
+
+        rel_vel_norm = np.linalg.norm(rel_vel)
+        rel_pos_norm = np.linalg.norm(rel_pos)
+
+        if rel_vel_norm < 1e-12 or rel_pos_norm < 1e-12:
+            return 0.0, np.zeros(6)
+
+        # Encounter plane: normal = relative velocity direction
+        n_hat = rel_vel / rel_vel_norm
+
+        # Project relative position onto encounter plane (perpendicular to rel_vel)
+        rel_pos_proj = rel_pos - np.dot(rel_pos, n_hat) * n_hat
+        d_2d = np.linalg.norm(rel_pos_proj)
+
+        # Build orthogonal basis in encounter plane for output vector
+        if d_2d > 1e-12:
+            u1 = rel_pos_proj / d_2d
+        else:
+            # rel_pos aligned with velocity — use arbitrary perpendicular
+            u1 = np.cross(n_hat, np.array([1.0, 0.0, 0.0]))
+            if np.linalg.norm(u1) < 1e-12:
+                u1 = np.cross(n_hat, np.array([0.0, 1.0, 0.0]))
+            u1 = u1 / np.linalg.norm(u1)
+        u2 = np.cross(n_hat, u1)
+
+        # Encounter plane components
+        rel_pos_plane = np.array([np.dot(rel_pos, u1), np.dot(rel_pos, u2), np.dot(rel_pos, n_hat)])
+        rel_vel_plane = np.array([np.dot(rel_vel, u1), np.dot(rel_vel, u2), np.dot(rel_vel, n_hat)])
+
+        # 2D covariance ellipse axes (in km, same units as positions)
         a = sigma_i
         b = sigma_c
         r_combined = r1_hb + r2_hb
-    
-        # Alfano 2D 충돌 확률 계산
-        if d_2d > r_combined:
+
+        # Alfano 2D maximum collision probability
+        if a * b < 1e-24:
+            P_max = 1.0 if d_2d <= r_combined else 0.0
+        elif d_2d > r_combined:
             P_max = np.exp(-0.5 * (d_2d**2) / (a * b)) * (r_combined / (np.sqrt(2 * np.pi * a * b)))
         else:
             P_max = 1.0

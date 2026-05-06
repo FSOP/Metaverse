@@ -13,15 +13,16 @@
 # ---------------------------------------------
 from MISC.TLEmanager import TLEmanager
 from MISC.DBmanager import DBmanager
+from MISC import config
 import pymsis
-from datetime import datetime
+from datetime import datetime, timezone
 
 tleman = TLEmanager()
 dbman = DBmanager()
 
-tleman.download_tle_and_save(chk_saveDb=True)
-# TLE 업데이트 후 마지막 TLE 업데이트 시간 기록
-dbman.update_last_tle_update(datetime.now())
+tleman.download_tle_and_save(chk_saveDb=True, source=config.TLE_SOURCE)
+# TLE 업데이트 후 마지막 TLE 업데이트 시간 기록 (UTC)
+dbman.update_last_tle_update(datetime.now(timezone.utc))
 dbman.download_and_insert_satcat()
 
 pymsis.utils.download_f107_ap() # F10.7 및 Ap 지수 데이터 다운로드

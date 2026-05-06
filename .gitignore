@@ -1,3 +1,20 @@
+# Environment files
+.env
+env.py
+
+# Logs
+ca_api_errors.log
+
+# Virtual environment
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+.pytest_cache/
+
+# Local python env file (do not commit)
+env.py
 # -----------------
 # Python 관련
 # -----------------

@@ -45,18 +45,20 @@ import os, sys
 import MISC.Structurer as structer
 import numpy as np
 
-from datetime import datetime, timedelta
-from HPOP.force_models import ForceModel
+from datetime import datetime, timedelta, timezone
 from MISC.TLEmanager import TLEmanager
 from MISC.DBmanager import DBmanager
 from CA.CA_filter import CA_filter
 from CA.RA_ephemeris import propagate_hpop_to_surface
 from CA.orbitcalculator import orcal
-from HPOP.force_models import ForceModel
 from HPOP.eop import EOPManager
 from HPOP.astroephemeris import EphemerisManager
 from HPOP.gravity_models import GravityModel # 새로 만든 클래스를 import
 from HPOP.atmosphere import AtmosphereModel
+from HPOP.force_models import ForceModel
+from CA.reentry_processor import process_reentry_sat
+from MISC import reentry_uploader as ephem_client
+import json
 
 
 ALTITUDE_THRESHOLD = 200.0  # km
@@ -68,42 +70,46 @@ def main():
     db_man = DBmanager() # DBmanager: 위성 정보 DB 연동
     or_cal = orcal() # orcal: 궤도 계산기
 
-    total_res = []
+    # results are uploaded to server; no local accumulation
 
-    start_epoch = datetime.now()
+    start_epoch = datetime.now(timezone.utc)
         # 분석 시작/종료 시각 설정 (현재~10일 후)
     end_epoch = start_epoch + timedelta(days=10)
 
-    # Step 1: Load TLEs
-    # 전체 TLE 데이터 불러오기
+    # Step 1: Load TLEs 전체 TLE 데이터 불러오기
     all_tles = tle_manager.all_tles()
  
-    # Step 2: Filter outdated TLEs
-    # 유효 기간 내 TLE만 필터링 (pad_days: 여유 기간)
+    # Step 2: Filter outdated TLEs  # 유효 기간 내 TLE만 필터링 (pad_days: 여유 기간)
     tles = tle_manager.filter_outdated_tles(all_tles, start_epoch, end_epoch, pad_days=10)
 
-    # Step 3: Filter by apogee/perigee
-    # 궤도(perigee) 기준 필터링 (저고도 위성만 선별)
+    # Step 3: Filter by apogee/perigee  # 궤도(perigee) 기준 필터링 (저고도 위성만 선별)
     tles = CA_manager.filter_perigee(tles, ALTITUDE_THRESHOLD)
 
-    # Step 4: Filter by Bstar
-        # Bstar(드래그) 기준 필터링 (대기저항 큰 위성만 선별)
+    # Step 4: Filter by Bstar  # Bstar(드래그) 기준 필터링 (대기저항 큰 위성만 선별)
     tles = CA_manager.filter_BSTAR(tles, BSTAR_THRESHOLD)  # example value
 
     print(f"Number of whole TLE: {len(all_tles)} Filtered TLEs: {len(tles)}")
-    pass
+    
 
     # Step 5: For each filtered TLE, analyze reentry
     filtered_result = []
+    # no local accumulation of results
     for tle in tles:
         sat = tle
             # SGP4로 ALTITUDE_THRESHOLD(저고도) 도달 시각/상태벡터 계산
         code, reentry_time, state_vector = CA_manager.get_state_at_altitude(sat, start_epoch, ALTITUDE_THRESHOLD, 30, 10)
+        # Only keep entries with successful state vector (code == 0)
+        if code != 0 or state_vector is None:
+            print(f"Satellite {sat[0]} skipped (code={code}, state_vector={state_vector})")
+            continue
         reenter_sat = {
             "norad": sat[0],
             "code": code,  # 0: success, 1: error, 2: already-decayed
             "reentry_time": reentry_time,
-            "state_vector": state_vector
+            "state_vector": state_vector,
+            "tle_line1": sat[1] if len(sat) > 1 else None,
+            "tle_line2": sat[2] if len(sat) > 2 else None,
+            "tle_epoch": sat[3] if len(sat) > 3 else None,
         }
         filtered_result.append(reenter_sat)
         print(f"Satellite {sat[0]}: code={code}, reentry_time={reentry_time}, state={state_vector}")
@@ -128,33 +134,82 @@ def main():
         atmosphere_model=AtmosphereModel()
         # ForceModel: HPOP에서 사용할 외력/환경 모델 객체 생성
     )
-
     # 1차 필터링한 결과 나온 event들을 정밀 궤도전파기로 정밀분석
-    for reenter_sat in filtered_result:
-        if reenter_sat['code'] == 0 and reenter_sat['state_vector'] is not None:
-            # HPOP을 이용해 위성이 지표면에 도달할 때까지 propagate
-            impact_time, impact_location, ephemeris = propagate_hpop_to_surface(reenter_sat['state_vector'], reenter_sat['reentry_time'], force_model)
+    for sat in filtered_result:
+        # pass the full dict so `process_reentry_sat` can use the precomputed 'state_vector' path
+        processed = process_reentry_sat(sat, start_epoch, CA_manager, force_model, db_man, or_cal)
+        if not processed:
+            continue
 
-            # 위성에 대한 정보
-            sat_info = db_man.get_SATCAT_info(reenter_sat['norad'])
-            ephem1 = structer.reassemble_orbit(ephemeris)
-            SAT1 = structer.SAT_struc(sat_info['NORAD_CAT_ID'], sat_info['OBJECT_NAME'], sat_info['OBJECT_TYPE'], sat_info['RCS'], ephem1, 0, "")
+        # Serialize & upload sampled ephemeris to server; fallback to repr()
+        try:
+            sampled = processed.get('ephemeris_sampled') or []
+            crash_id_local = processed.get('crash_id')
+            # build metadata to send along with ephemeris file so server can store searchable fields
+            metadata = {
+                'crash_id': processed.get('crash_id'),
+                'norad_cat_id': processed.get('norad_cat_id'),
+                'object_name': processed.get('object_name'),
+                'object_type': processed.get('object_type'),
+                'rcs': processed.get('rcs'),
+                'time_crash': processed.get('time_crash').astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if processed.get('time_crash') is not None else None,
+                'creation_date': processed.get('creation_date').astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if processed.get('creation_date') is not None else None,
+                'prob_crash': processed.get('prob_crash'),
+                'coordinate_frame': 'ICRF',
+                'frame_type': 'inertial',
+            }
 
-            inst_eop = force_model.get_eop()
-            inst_eop['Date'] = start_epoch.strftime('%Y%m%d')
-            inbound_info = structer.inbound_info(or_cal.cal_inbound(ephemeris), inst_eop)
+            # 초기 상태(epoch)를 명시적으로 포함: processed의 start_time 우선, 없으면 sat의 reentry_time 사용
+            initial_epoch = None
+            if processed.get('start_time') is not None:
+                initial_epoch = processed.get('start_time')
+            else:
+                initial_epoch = sat.get('reentry_time')
 
-            total_res.append(structer.crash(
-                crash_id = f"{impact_time.strftime('%Y%m%d_%H%M%S')}_{reenter_sat['norad']}",
-                creation_date = datetime.now(),
-                start_time = reenter_sat['reentry_time'],
-                SAT_info = SAT1,
-                inbound_info = inbound_info,
-                orbit_crash = ephem1,
-                time_crash = impact_time,
-                point_crash = impact_location,
-                prob_crash = None
-            ))
+            debug_metadata = {
+                "norad": sat.get("norad"),
+                "tle_line1": sat.get("tle_line1"),
+                "tle_line2": sat.get("tle_line2"),
+                "tle_epoch": sat.get("tle_epoch"),
+                "initial_state_vector": sat.get("state_vector"),
+                "initial_state_epoch": initial_epoch.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if initial_epoch is not None else None,
+                "reentry_time": sat.get("reentry_time"),
+                "hpop_step_seconds": 60,
+                "hpop_max_duration_hours": 12,
+                "coordinate_frame": "ICRF",
+                "frame_type": "inertial",
+            }
+
+            orbit_ref = ephem_client.upload_sampled_ephemeris(
+                sampled,
+                prefer='msgpack',
+                compress=True,
+                timeout=30,
+                max_retries=3,
+                crash_id=crash_id_local,
+                use_multipart=True,
+                metadata=metadata,
+                debug_metadata=debug_metadata,
+            )
+            upload_status = 'success'
+        except Exception as e:
+            orbit_ref = repr(processed.get('ephemeris_sampled'))
+            upload_status = f'failed: {e!r}'
+
+        inbound_info = processed.get('inbound_info_str') or ''
+        try:
+            orbit_summary = processed.get('orbit_summary') or ephem_client.build_orbit_summary(processed.get('ephemeris_sampled') or [])
+            combined = {'inbound': inbound_info, 'orbit_summary': orbit_summary}
+            inbound_info_str = json.dumps(combined, ensure_ascii=False)
+        except Exception:
+            inbound_info_str = inbound_info
+
+        # 로그: 업로드 결과 및 충돌 검출 여부 표시
+        time_crash = processed.get('time_crash')
+        crash_id = processed.get('crash_id')
+        noimpact = time_crash is None
+        print(f"Upload result: crash_id={crash_id} noimpact={noimpact} upload_status={upload_status} orbit_ref={orbit_ref}")
+
 
 
 if __name__ == "__main__":

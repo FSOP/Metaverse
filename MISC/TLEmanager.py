@@ -1,18 +1,17 @@
 # This file is part of the Metaverse project.
 # It is subject to the license terms in the LICENSE file found in the top-level directory of this distribution.
 # No part of the Metaverse project, including this file, may be copied, modified,
-# propagated, or distributed except according to the terms contained in the LICENSE file.    
-
-# metaverse/TLEmanager.py
-import os, sys    
+# propagated, or distributed except according to the terms contained in the LICENSE file.
+import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from MISC.DBmanager import DBmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import MISC.constants as const
 import math
 import numpy as np
 import requests
+
 
 class TLEmanager:
     def download_and_insert_celestrak_tle(self, url, save_path):
@@ -48,7 +47,8 @@ class TLEmanager:
 
         # Get the date for Jan 1 of the year, then add day_of_year-1 days
         dt = datetime(year, 1, 1) + timedelta(days=day_of_year - 1)
-        return dt
+        # TLE epochs are given in UTC; return timezone-aware UTC datetime
+        return dt.replace(tzinfo=timezone.utc)
     
     def all_tles(self):
         """
@@ -71,6 +71,14 @@ class TLEmanager:
         end_limit = end_time + timedelta(days=pad_days)
 
         for norad, line1, line2, tle_epoch in tle_data:
+            # ensure tle_epoch is timezone-aware UTC for safe comparison
+            try:
+                if isinstance(tle_epoch, datetime) and tle_epoch.tzinfo is None:
+                    tle_epoch = tle_epoch.replace(tzinfo=timezone.utc)
+            except Exception:
+                # if tle_epoch is not a datetime, skip that entry
+                continue
+
             if start_limit <= tle_epoch <= end_limit:
                 filtered_tles.append((norad, line1, line2, tle_epoch))
         return filtered_tles
@@ -78,18 +86,20 @@ class TLEmanager:
         
     # Insert TLEs from a file into the database
     def insert_tles_from_file(self, filename):
+        # Use bulk insert to speed up DB writes
         self.db_manager.flush_TLE_data()  # Clear existing TLE data
 
         with open(filename, 'r') as f:
             lines = f.readlines()
 
+        rows = []
         # Process every 3 lines as one TLE set
         for i in range(0, len(lines), 3):
-            if i+2 >= len(lines):
+            if i + 2 >= len(lines):
                 break  # incomplete TLE set
             sat_name = lines[i][1:].strip()
-            line1 = lines[i+1].strip()
-            line2 = lines[i+2].strip()
+            line1 = lines[i + 1].strip()
+            line2 = lines[i + 2].strip()
 
             # Extract NORAD number from line1 (columns 3-7)
             try:
@@ -100,10 +110,14 @@ class TLEmanager:
             tle_epoch = line1[18:32].strip()  # Extract epoch from line1]
             epoch_datetime = self.tlepoch_to_datetime(tle_epoch)
             source = "CELESTRAK"
-            self.db_manager.insert_TLE_data(source, epoch_datetime, norad, line1, line2, sat_name)
+            rows.append((source, epoch_datetime, norad, line1, line2, sat_name))
 
             if i % 10000 == 0:
-                print(f"Inserted TLE for NORAD {norad}: {sat_name}")
+                print(f"Prepared TLE row for NORAD {norad}: {sat_name}")
+
+        # Bulk insert for performance
+        self.db_manager.insert_TLEs_bulk(rows)
+        print(f"Inserted {len(rows)} TLEs into DB (bulk)")
 
 
     def compute_apogee_perigee(self, line2):
@@ -166,11 +180,67 @@ class TLEmanager:
         bstar = m * 10 ** e
         return bstar
 
-    def download_tle_and_save(self, fname=datetime.now().strftime("%Y%m%d_%H%M%S"), chk_saveDb=True):
+    def download_tle_and_save(self, fname=None, chk_saveDb=True, source='auto'):
+        """
+        Download TLEs and save to file. `source` can be 'auto', 'spacetrack', or 'celestrak'.
+        - 'auto': use space-track when credentials provided, otherwise celestrak
+        - 'spacetrack': explicitly use space-track (login required)
+        - 'celestrak': explicitly use celestrak
+        """
+        # Credentials and URLs
+        space_user = os.getenv('SPACE_TRACK_USER')
+        space_pass = os.getenv('SPACE_TRACK_PASSWORD')
         celestrak_url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
-        save_path = f"/home/user1229/metaverse/TLEs/celestrak_active_tle_{fname}.txt"
 
-        response = requests.get(celestrak_url)
+        if fname is None:
+            # use UTC timestamp for filenames
+            fname = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        save_path = f"/home/user1229/metaverse/TLEs/tle_{fname}.txt"
+
+        # Decide whether to use space-track
+        if source == 'spacetrack':
+            use_spacetrack = True
+        elif source == 'celestrak':
+            use_spacetrack = False
+        else:  # auto
+            use_spacetrack = bool(space_user and space_pass)
+
+        if use_spacetrack:
+            print("Using space-track.org to download TLEs")
+            session = requests.Session()
+            login_url = "https://www.space-track.org/ajaxauth/login"
+            payload = {"identity": space_user, "password": space_pass}
+            r = session.post(login_url, data=payload, timeout=30)
+            if r.status_code != 200 or 'Login' in r.text:
+                print("space-track login failed, falling back to Celestrak")
+            else:
+                # Try several likely endpoints in order
+                # Use gp class with 3LE format (includes name + 2 TLE lines) for bulk TLEs
+                query_candidates = [
+                    "https://www.space-track.org/basicspacedata/query/class/gp/EPOCH/%3Enow-30/orderby/NORAD_CAT_ID,EPOCH/format/3le",
+                    "https://www.space-track.org/basicspacedata/query/class/tle_latest/format/tle",
+                    "https://www.space-track.org/basicspacedata/query/class/tle/format/tle",
+                ]
+                for query_url in query_candidates:
+                    try:
+                        r2 = session.get(query_url, timeout=120)
+                        if r2.status_code == 200 and r2.text:
+                            with open(save_path, "w", encoding="utf-8") as f:
+                                f.write(r2.text)
+                            print(f"TLE saved to {save_path} (space-track) via {query_url}")
+                            if chk_saveDb:
+                                self.insert_tles_from_file(save_path)
+                            return
+                        else:
+                            body = (r2.text or '')[:400]
+                            print(f"space-track query {query_url} returned {r2.status_code}; body: {body!r}")
+                    except Exception as e:
+                        print(f"space-track query {query_url} failed: {e}")
+                print("space-track queries exhausted; falling back to Celestrak")
+
+        # Use Celestrak as fallback or explicitly requested
+        print("Using Celestrak to download TLEs")
+        response = requests.get(celestrak_url, timeout=60)
         response.raise_for_status()
         with open(save_path, "w", encoding="utf-8") as f:
             f.write(response.text)
@@ -182,11 +252,4 @@ class TLEmanager:
 
 
 
-if __name__ == "__main__":
-
-
-    tle_manager = TLEmanager()
-    tle_manager.download_tle_and_save()
-    # Example: Download latest active TLEs from Celestrak and insert to DB
-    
-    print("end")
+# module intended for import; example usage removed

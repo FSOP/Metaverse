@@ -2,7 +2,7 @@ import mariadb
 import requests
 import csv
 
-class DBmanager: 
+class DBmanager:         
     user       = "mverse"
     password   = "dlstn"
     host       = "localhost"
@@ -39,14 +39,84 @@ class DBmanager:
         self.curr.execute(query, (norad,))
         return self.curr.fetchall()
 
+    def get_latest_TLE(self, norad):
+        """
+        Returns the latest TLE (by creation_date) for a single NORAD.
+        """
+        query = "SELECT norad, line1, line2, creation_date FROM TLE_DATA WHERE norad = ? ORDER BY creation_date DESC LIMIT 1"
+        self.curr.execute(query, (norad,))
+        row = self.curr.fetchone()
+        return [row] if row else []
+
+    def get_latest_TLE_asof(self, norad, as_of_dt):
+        """Returns the latest TLE (by creation_date) for a NORAD where creation_date <= as_of_dt."""
+        query = (
+            "SELECT norad, line1, line2, creation_date "
+            "FROM TLE_DATA "
+            "WHERE norad = ? AND creation_date <= ? "
+            "ORDER BY creation_date DESC LIMIT 1"
+        )
+        self.curr.execute(query, (norad, as_of_dt))
+        row = self.curr.fetchone()
+        return [row] if row else []
+
     def get_all_TLEs(self):
         query = "SELECT norad, line1, line2, creation_date FROM TLE_DATA order by norad"
         self.curr.execute(query)
         return self.curr.fetchall()
 
+    def get_latest_TLEs(self):
+        """
+        Returns the latest TLE (by creation_date) for each NORAD.
+        """
+        query = """
+        SELECT t1.norad, t1.line1, t1.line2, t1.creation_date
+        FROM TLE_DATA t1
+        JOIN (
+            SELECT norad, MAX(creation_date) AS max_dt
+            FROM TLE_DATA
+            GROUP BY norad
+        ) t2
+          ON t1.norad = t2.norad
+         AND t1.creation_date = t2.max_dt
+        ORDER BY t1.norad
+        """
+        self.curr.execute(query)
+        return self.curr.fetchall()
+
+    def get_latest_TLEs_asof(self, as_of_dt):
+        """Returns the latest TLE (by creation_date) for each NORAD where creation_date <= as_of_dt."""
+        query = """
+        SELECT t1.norad, t1.line1, t1.line2, t1.creation_date
+        FROM TLE_DATA t1
+        JOIN (
+            SELECT norad, MAX(creation_date) AS max_dt
+            FROM TLE_DATA
+            WHERE creation_date <= ?
+            GROUP BY norad
+        ) t2
+          ON t1.norad = t2.norad
+         AND t1.creation_date = t2.max_dt
+        ORDER BY t1.norad
+        """
+        self.curr.execute(query, (as_of_dt,))
+        return self.curr.fetchall()
+
     def insert_TLE_data(self, str_source, dt_creation_date, int_norad, str_line1, str_line2, str_sat_name):
         query = "INSERT INTO TLE_DATA (TLE_source, creation_date, norad, line1, line2, sat_name) VALUES (?, ?, ?, ?, ?, ?)"
         self.curr.execute(query, (str_source, dt_creation_date, int_norad, str_line1, str_line2, str_sat_name))
+        self.conn.commit()
+
+    def insert_TLEs_bulk(self, rows):
+        """
+        Insert multiple TLE rows in a single transaction for speed.
+        `rows` should be an iterable of tuples: (source, creation_date, norad, line1, line2, sat_name)
+        Uses executemany and a single commit to avoid per-row commits.
+        """
+        if not rows:
+            return
+        query = "INSERT INTO TLE_DATA (TLE_source, creation_date, norad, line1, line2, sat_name) VALUES (%s, %s, %s, %s, %s, %s)"
+        self.curr.executemany(query, rows)
         self.conn.commit()
 
     def flush_TLE_data(self):
@@ -64,9 +134,16 @@ class DBmanager:
         self.curr.execute(query)
         return self.curr.fetchone()[0]
     
-    def insert_CA(self, norad1, norad2, name1, name2, tca, closest_distance_km, probability=0.0):
-        query = "INSERT INTO CA (sat1_norad, sat1_name, sat2_norad, sat2_name, tca, miss_distance, probability) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        self.curr.execute(query, (norad1, name1, norad2, name2, tca, closest_distance_km, probability))
+    def insert_CA(self, norad1, norad2, name1, name2, tca, closest_distance_km, probability=0.0, creation_date=None):
+        """
+        CA(충돌 분석) 결과를 DB에 저장.
+        creation_date가 None이면 현재 UTC 시각을 자동 사용.
+        """
+        from datetime import datetime, timezone
+        if creation_date is None:
+            creation_date = datetime.now(timezone.utc)
+        query = "INSERT INTO CA (sat1_norad, sat1_name, sat2_norad, sat2_name, tca, miss_distance, probability, creation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        self.curr.execute(query, (norad1, name1, norad2, name2, tca, closest_distance_km, probability, creation_date))
         self.conn.commit()
     
     def download_and_insert_satcat(self):
@@ -188,11 +265,26 @@ class DBmanager:
             query = "SELECT norad_cat_id FROM primary_satellites"
             self.curr.execute(query)
             return [row[0] for row in self.curr.fetchall()]
+    
+    def insert_reentry_event(self, crash_id, creation_date, start_time, norad_cat_id, object_name, object_type, rcs, orbit_crash, time_crash, lat_crash, lon_crash, alt_crash, prob_crash, inbound_info):
+            """
+            reentry_events 테이블에 위성 재진입(추락) 결과를 저장
+            orbit_crash, inbound_info는 JSON/text로 저장
+            """
+            query = """
+            INSERT INTO reentry_events (
+                crash_id, creation_date, start_time, norad_cat_id, object_name, object_type, rcs,
+                orbit_crash, time_crash, lat_crash, lon_crash, alt_crash, prob_crash, inbound_info
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            self.curr.execute(query, (
+                crash_id, creation_date, start_time, norad_cat_id, object_name, object_type, rcs,
+                orbit_crash, time_crash, lat_crash, lon_crash, alt_crash, prob_crash, inbound_info
+            ))
+            self.conn.commit()
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.curr.close()
         self.conn.close()
-    
-if __name__ == "__main__":
-    dbm = DBmanager()
-    dbm.download_and_insert_satcat()
+
+# module intended for import; example usage removed

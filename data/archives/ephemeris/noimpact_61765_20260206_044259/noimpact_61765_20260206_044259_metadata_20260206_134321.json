@@ -1,0 +1,12 @@
+{
+  "crash_id": "noimpact_61765_20260206_044259",
+  "norad_cat_id": 61765,
+  "object_name": "MORDOVIA-IOT (RS50S)",
+  "object_type": "PAY",
+  "rcs": null,
+  "time_crash": null,
+  "creation_date": "2026-02-06T04:42:59Z",
+  "prob_crash": 0.0,
+  "coordinate_frame": "ICRF",
+  "frame_type": "inertial"
+}

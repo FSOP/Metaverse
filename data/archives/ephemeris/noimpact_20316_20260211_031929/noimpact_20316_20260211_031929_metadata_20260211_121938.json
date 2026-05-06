@@ -1,0 +1,12 @@
+{
+  "crash_id": "noimpact_20316_20260211_031929",
+  "norad_cat_id": 20316,
+  "object_name": "ARIANE 44L R/B",
+  "object_type": "R/B",
+  "rcs": 23.5334,
+  "time_crash": null,
+  "creation_date": "2026-02-11T03:19:29Z",
+  "prob_crash": 0.0,
+  "coordinate_frame": "ICRF",
+  "frame_type": "inertial"
+}

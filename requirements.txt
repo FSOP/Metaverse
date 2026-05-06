@@ -33,3 +33,4 @@ tqdm==4.67.1
 tzdata==2025.2
 urllib3==2.5.0
 xarray==2025.8.0
+lxml==6.0.2

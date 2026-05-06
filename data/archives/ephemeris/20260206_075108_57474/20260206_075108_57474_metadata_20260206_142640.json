@@ -1,0 +1,12 @@
+{
+  "crash_id": "20260206_075108_57474",
+  "norad_cat_id": 57474,
+  "object_name": "STARLINK-30110",
+  "object_type": "PAY",
+  "rcs": null,
+  "time_crash": "2026-02-06T07:51:08Z",
+  "creation_date": "2026-02-06T05:24:46Z",
+  "prob_crash": 1.0,
+  "coordinate_frame": "ICRF",
+  "frame_type": "inertial"
+}

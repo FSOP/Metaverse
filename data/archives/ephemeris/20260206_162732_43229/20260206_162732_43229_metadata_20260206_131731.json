@@ -1,0 +1,12 @@
+{
+  "crash_id": "20260206_162732_43229",
+  "norad_cat_id": 43229,
+  "object_name": "PODSAT",
+  "object_type": "PAY",
+  "rcs": null,
+  "time_crash": "2026-02-06T16:27:32Z",
+  "creation_date": "2026-02-06T04:16:34Z",
+  "prob_crash": 0.76,
+  "coordinate_frame": "ICRF",
+  "frame_type": "inertial"
+}
