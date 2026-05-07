@@ -23,6 +23,16 @@ import logging
 from datetime import datetime, timezone
 import requests
 
+try:
+    from MISC import config as _config
+except ImportError:
+    try:
+        import sys, os as _os
+        sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        from MISC import config as _config
+    except ImportError:
+        _config = None  # type: ignore
+
 
 logging.getLogger(__name__)
 
@@ -35,7 +45,9 @@ class CAEventSender:
         self.session = requests.Session()
 
     def _get_headers(self):
-        token = os.getenv("CA_API_TOKEN")
+        token = (getattr(_config, 'CA_API_TOKEN', None)
+                 or os.getenv("CA_API_TOKEN")
+                 or getattr(_config, 'EPHEMERIS_API_KEY', None))
         if not token:
             logging.error("CA_API_TOKEN is missing. API send aborted.")
             return None

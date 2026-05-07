@@ -28,6 +28,9 @@ EPHEMERIS_UPLOAD_PATH = _env_get("EPHEMERIS_UPLOAD_PATH", "/api/v1/ephemeris/upl
 # Optional API key for Authorization header when uploading ephemeris
 EPHEMERIS_API_KEY = _env_get("EPHEMERIS_API_KEY")
 
+# Bearer token for CA event API (falls back to EPHEMERIS_API_KEY if not set)
+CA_API_TOKEN = _env_get("CA_API_TOKEN") or _env_get("EPHEMERIS_API_KEY")
+
 # Preferred TLE source: 'auto' | 'spacetrack' | 'celestrak'
 TLE_SOURCE = _env_get("TLE_SOURCE", "auto")
 

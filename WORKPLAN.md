@@ -186,5 +186,16 @@ git reset --hard <before-commit-hash>
 
 | 날짜 | 내용 | 커밋 |
 |------|------|------|
-| 2026-05-07 | 작업 계획서 작성, 문제 분석 | (before 커밋) |
-| 2026-05-07 | CA_API_TOKEN 통합, run_once.py 수정 | (after 커밋) |
+| 2026-05-07 | 작업 계획서 작성, 문제 분석 | `before: 분석 컴퓨터 이전 후 복구 작업 전 스냅샷` |
+| 2026-05-07 | CA_API_TOKEN config.py 통합 (env.py fallback), ca_api.py 수정 | `fix:` |
+| 2026-05-07 | TLEmanager.download_tle_and_save() → save_path 반환하도록 수정 | `fix:` |
+| 2026-05-07 | run_once.py → SUBTASK_REPORT JSON 출력 추가, TLE JSON 임시파일 생성 | `fix:` |
+
+### 검증 결과
+
+| 검증 항목 | 결과 |
+|-----------|------|
+| `config.CA_API_TOKEN` 로딩 | ✅ True |
+| `ca_api._get_headers()` 반환 | ✅ Authorization 헤더 포함 |
+| `_parse_subtask_report()` 파싱 | ✅ snapshot_id 추출 성공 |
+| TLE 파일 → JSON 파싱 31,177개 | ✅ 정상 |

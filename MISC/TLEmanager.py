@@ -239,7 +239,7 @@ class TLEmanager:
                             print(f"TLE saved to {save_path} (space-track) via {query_url}")
                             if chk_saveDb:
                                 self.insert_tles_from_file(save_path)
-                            return
+                            return save_path
                         else:
                             body = (r2.text or '')[:400]
                             print(f"space-track query {query_url} returned {r2.status_code}; body: {body!r}")
@@ -259,6 +259,7 @@ class TLEmanager:
             self.insert_tles_from_file(save_path)
 
         print(f"TLE downloaded and saved to {save_path}")
+        return save_path
 
 
 
