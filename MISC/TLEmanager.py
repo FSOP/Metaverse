@@ -190,12 +190,21 @@ class TLEmanager:
         # Credentials and URLs
         space_user = os.getenv('SPACE_TRACK_USER')
         space_pass = os.getenv('SPACE_TRACK_PASSWORD')
+        # Fallback: read from env.py if env vars not set
+        if not space_user or not space_pass:
+            try:
+                import env as _e  # type: ignore
+                space_user = space_user or getattr(_e, 'SPACE_TRACK_USER', None)
+                space_pass = space_pass or getattr(_e, 'SPACE_TRACK_PASSWORD', None)
+            except Exception:
+                pass
         celestrak_url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
 
         if fname is None:
             # use UTC timestamp for filenames
             fname = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        save_path = f"/home/user1229/metaverse/TLEs/tle_{fname}.txt"
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        save_path = os.path.join(_project_root, "TLEs", f"tle_{fname}.txt")
 
         # Decide whether to use space-track
         if source == 'spacetrack':
@@ -240,7 +249,8 @@ class TLEmanager:
 
         # Use Celestrak as fallback or explicitly requested
         print("Using Celestrak to download TLEs")
-        response = requests.get(celestrak_url, timeout=60)
+        _headers = {"User-Agent": "Mozilla/5.0 (compatible; TLEmanager/1.0)"}
+        response = requests.get(celestrak_url, timeout=60, headers=_headers)
         response.raise_for_status()
         with open(save_path, "w", encoding="utf-8") as f:
             f.write(response.text)
