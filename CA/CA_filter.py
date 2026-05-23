@@ -72,6 +72,27 @@ class CA_filter:
                 filtered_tles.append(t)
         return filtered_tles
 
+    @staticmethod
+    def _batch_apogee_perigee(line2_list):
+        """
+        [최적화 2026-05-23] TLE line2 리스트에서 apogee/perigee를 numpy로 일괄 계산.
+        기존: 위성마다 extract_elements + compute_apogee_perigee 호출 (Python 루프)
+        개선: 문자열 슬라이싱 → numpy 배열 → 벡터 연산 (단 1회)
+
+        반환: (apogee_arr, perigee_arr) — shape (N,), 단위 km (고도)
+        """
+        n_sats = len(line2_list)
+        e_arr = np.empty(n_sats)
+        n_arr = np.empty(n_sats)
+        for k, l2 in enumerate(line2_list):
+            e_arr[k] = float("0." + l2[26:33].strip())
+            n_arr[k] = float(l2[52:63].strip())
+        n_rad = n_arr * (2.0 * np.pi / 86400.0)
+        a_arr = (const.MU / n_rad ** 2) ** (1.0 / 3.0)
+        apogee  = a_arr * (1.0 + e_arr) - const.EARTH_RADIUS_KM
+        perigee = a_arr * (1.0 - e_arr) - const.EARTH_RADIUS_KM
+        return apogee, perigee
+
     def filter_altitude(self, tle_data, ref_line2, pad=None):
         """
         1단계: 고도 사전필터 (Apogee/Perigee Pre-filter)
@@ -83,31 +104,30 @@ class CA_filter:
         - 두 위성의 고도 범위가 겹치지 않으면 물리적으로 충돌 불가능
         - 가장 빠르고 저비용인 필터 → 대부분의 위성을 여기서 제거
 
+        [최적화 2026-05-23]
+        - 기존: 위성마다 compute_apogee_perigee 개별 호출 (Python 루프 N회)
+        - 개선: _batch_apogee_perigee로 전체 numpy 벡터 연산 (1회)
+        - 정확도 변화 없음 (동일 공식)
+
         Args:
             tle_data: 전체 TLE 리스트 [(norad, line1, line2, epoch), ...]
             ref_line2: 기준 위성의 TLE line2
             pad: 고도 여유값(km). None이면 adaptive 계산
-
         """
-        filtered_tles = []
         ref_apogee, ref_perigee = self.tle_manager.compute_apogee_perigee(ref_line2)
         ref_orb = self.tle_manager.extract_elements(ref_line2)
-        # Adaptive pad: 2% of semi-major axis, with a minimum of 100 km,
-        # unless an explicit pad is provided.
         adaptive_pad = max(100.0, 0.02 * ref_orb["a"])
         pad_km = float(adaptive_pad if pad is None else pad)
 
-        for i in range(len(tle_data)):
-            norad, line1, line2, tle_epoch = tle_data[i]
-            sat2_apogee, sat2_perigee = self.tle_manager.compute_apogee_perigee(line2)
+        # 전체 후보 위성 apogee/perigee를 numpy로 일괄 계산
+        line2_list = [row[2] for row in tle_data]
+        sat_apogee, sat_perigee = self._batch_apogee_perigee(line2_list)
 
-            # Check if the apogee and perigee are within the specified pad
-            if not (
-                (sat2_apogee < ref_perigee - pad_km) or (sat2_perigee > ref_apogee + pad_km)
-            ):
-                filtered_tles.append((norad, line1, line2, tle_epoch))
-
-        return filtered_tles
+        # 겹침 조건: sat_apogee >= ref_perigee - pad AND sat_perigee <= ref_apogee + pad
+        keep = ~(
+            (sat_apogee < ref_perigee - pad_km) | (sat_perigee > ref_apogee + pad_km)
+        )
+        return [tle_data[i] for i in np.where(keep)[0]]
 
     def filter_orbitpath(self, tle_data, ref_line2, N_points=None, threshold=300):
         """
@@ -398,6 +418,21 @@ class CA_filter:
     #   기존 per-satellite Python 루프 대비 4~5배 빠름
     #   (662s → 136s for NORAD 64586, 분석기간 7일)
     # ─────────────────────────────────────────────────
+    @staticmethod
+    def _make_jd_arrays(t0: datetime, n_steps: int, dt_s: float):
+        """
+        [최적화 2026-05-23] Python 루프 jday 호출 → numpy 벡터 연산으로 대체.
+        JD 기준점(t0)에 초 단위 오프셋을 더해 전체 배열을 한 번에 계산.
+        반환: (jds, frs) — shape (n_steps,), 각각 정수부/소수부
+        """
+        jd0, fr0 = jday(t0.year, t0.month, t0.day,
+                        t0.hour, t0.minute,
+                        t0.second + t0.microsecond / 1e6)
+        jd_total = (jd0 + fr0) + np.arange(n_steps) * (dt_s / 86400.0)
+        jds = np.floor(jd_total)
+        frs = jd_total - jds
+        return jds, frs
+
     def filter_time(
         self,
         ref_sat,
@@ -413,59 +448,58 @@ class CA_filter:
         _, ref_l1, ref_l2, ref_epoch = ref_sat
 
         candidates = []
-        # 분석 시작/종료 시각 결정
         start = start_time if start_time is not None else ref_epoch
         end = end_time if end_time is not None else start + timedelta(days=analysis_days)
 
-        # 기준 위성 SGP4 객체 생성
         sat_ref = self.satrec_from_tle(ref_l1, ref_l2)
         r1_start, v1_start = self.sgp4_rv_at(sat_ref, start)
         el1 = self.orcal.elements_from_rv(r1_start, v1_start)
 
-        # ===== 기준 위성 coarse 그리드 사전 계산 (한 번만) =====
-        # 기본 coarse_dt = min_dt (120s) 고정으로 reference 그리드 구축
+        # ===== [최적화 2026-05-23] numpy 벡터화로 coarse 시간 배열 생성 =====
         base_coarse_dt = float(min_dt)
         total_seconds = (end - start).total_seconds()
         n_coarse = int(total_seconds / base_coarse_dt) + 1
 
-        # 시간 배열 생성 (JD, FR 형식)
-        jds_coarse = np.empty(n_coarse)
-        frs_coarse = np.empty(n_coarse)
-        times_coarse = []  # datetime 객체 리스트 (나중에 필요)
-        for i in range(n_coarse):
-            t_i = start + timedelta(seconds=i * base_coarse_dt)
-            times_coarse.append(t_i)
-            jd_i, fr_i = jday(t_i.year, t_i.month, t_i.day,
-                              t_i.hour, t_i.minute,
-                              t_i.second + t_i.microsecond / 1e6)
-            jds_coarse[i] = jd_i
-            frs_coarse[i] = fr_i
+        jds_coarse, frs_coarse = self._make_jd_arrays(start, n_coarse, base_coarse_dt)
 
-        # 기준 위성 배치 전파 (전체 시간 그리드)
+        # 기준 위성 전파 (전체 그리드, 1회)
         ref_arr = SatrecArray([sat_ref])
-        e_ref, r_ref, v_ref = ref_arr.sgp4(jds_coarse, frs_coarse)
-        # r_ref shape: (1, n_coarse, 3) → (n_coarse, 3)
-        ref_pos = r_ref[0]  # (n_coarse, 3)
-        ref_errs = e_ref[0]  # (n_coarse,) — 0이면 정상
+        e_ref, r_ref, _ = ref_arr.sgp4(jds_coarse, frs_coarse)
+        ref_pos = r_ref[0]   # (n_coarse, 3)
+        ref_errs = e_ref[0]  # (n_coarse,)
 
-        # ===== 각 후보 위성에 대해 배치 SGP4로 거리 계산 =====
+        # ===== [최적화 2026-05-23] 후보 위성 전체를 단일 SatrecArray로 배치 전파 =====
+        # 기존: 위성 1개씩 SatrecArray 생성 → N번 sgp4 호출
+        # 개선: 전체 후보를 하나의 배열로 묶어 → 1번 sgp4 호출
+        cand_list = []   # (other_sat, satrec, el2) 순서 보존
         for other_sat in tle_data:
-            other_norad, o_l1, o_l2, o_epoch = other_sat
-            # 자기 자신은 건너뜀
+            other_norad, o_l1, o_l2, _ = other_sat
             if other_norad == ref_sat[0]:
                 continue
-
             sat_o = self.satrec_from_tle(o_l1, o_l2)
             try:
                 r2_start, v2_start = self.sgp4_rv_at(sat_o, start)
             except RuntimeError:
                 continue
             el2 = self.orcal.elements_from_rv(r2_start, v2_start)
+            cand_list.append((other_sat, sat_o, el2))
 
-            # ---- 쌍별 파라미터 계산 ----
+        if not cand_list:
+            return candidates
+
+        # 전체 후보 위성 한 번에 coarse 전파
+        batch_arr = SatrecArray([sr for _, sr, _ in cand_list])
+        e_batch, r_batch, _ = batch_arr.sgp4(jds_coarse, frs_coarse)
+        # e_batch: (n_cands, n_coarse), r_batch: (n_cands, n_coarse, 3)
+
+        for ci, (other_sat, sat_o, el2) in enumerate(cand_list):
+            other_norad = other_sat[0]
+            o_pos  = r_batch[ci]   # (n_coarse, 3)
+            o_errs = e_batch[ci]   # (n_coarse,)
+
+            # ---- 쌍별 파라미터 ----
             if d_tol_km is None:
-                base = 0.005 * min(el1["a"], el2["a"])
-                pair_d_tol = max(25.0, min(100.0, base))
+                pair_d_tol = max(25.0, min(100.0, 0.005 * min(el1["a"], el2["a"])))
             else:
                 pair_d_tol = float(d_tol_km)
 
@@ -478,22 +512,12 @@ class CA_filter:
             else:
                 pair_time_window = float(time_window)
 
-            # ---- 후보 위성 배치 전파 ----
-            o_arr = SatrecArray([sat_o])
-            e_o, r_o, v_o = o_arr.sgp4(jds_coarse, frs_coarse)
-            o_pos = r_o[0]  # (n_coarse, 3)
-            o_errs = e_o[0]  # (n_coarse,)
-
-            # 유효한 시점만 사용 (양쪽 모두 에러 없는 시점)
+            # ---- 거리 배열 (벡터화) ----
             valid = (ref_errs == 0) & (o_errs == 0)
-
-            # 거리 배열 계산 (벡터화)
-            diff = ref_pos - o_pos  # (n_coarse, 3)
             dist_all = np.full(n_coarse, np.inf)
-            dist_all[valid] = np.linalg.norm(diff[valid], axis=1)
+            dist_all[valid] = np.linalg.norm(ref_pos[valid] - o_pos[valid], axis=1)
 
-            # ---- 극소점 + 임계값 이하 시점 탐색 ----
-            # refine_trigger: 이 거리 이하인 시점에서만 정밀 탐색 수행
+            # ---- 극소점 + 임계값 이하 trigger ----
             coarse_dt_pair = self.choose_coarse_dt_by_period_and_speed(
                 el1["a"], el2["a"], d_tol_km=pair_d_tol, min_dt=float(min_dt)
             )
@@ -501,84 +525,65 @@ class CA_filter:
             pair_refine_step = max(1.0, min(float(refine_step_s),
                                             pair_d_tol / max(v_rel_est, 0.01) / 4.0))
 
-            # 극소점 탐색: dist[i-1] >= dist[i] <= dist[i+1] 이고 dist[i] < refine_trigger
-            # 직접 임계값 이하 시점: dist[i] < pair_d_tol
             trigger_mask = np.zeros(n_coarse, dtype=bool)
-
-            # 3-point 극소점
             if n_coarse >= 3:
-                local_min = (
+                trigger_mask[1:-1] |= (
                     (dist_all[1:-1] <= dist_all[:-2]) &
                     (dist_all[1:-1] <= dist_all[2:]) &
                     (dist_all[1:-1] <= refine_trigger_km)
                 )
-                trigger_mask[1:-1] |= local_min
-
-            # 직접 임계값 이하
             trigger_mask |= (dist_all <= pair_d_tol)
 
             trigger_indices = np.where(trigger_mask)[0]
             if len(trigger_indices) == 0:
                 continue
 
-            # ---- 정밀 refinement (trigger 시점 근처에서) ----
+            # ---- trigger 인덱스 그룹화 ----
             last_added_t = None
             last_added_d = None
-
-            # 연속된 trigger 인덱스를 그룹으로 묶어 한 번만 refine
             groups = []
             current_group = [trigger_indices[0]]
             for k in range(1, len(trigger_indices)):
-                if trigger_indices[k] - trigger_indices[k-1] <= 2:
+                if trigger_indices[k] - trigger_indices[k - 1] <= 2:
                     current_group.append(trigger_indices[k])
                 else:
                     groups.append(current_group)
                     current_group = [trigger_indices[k]]
             groups.append(current_group)
 
+            # ---- [최적화 2026-05-23] refinement 시간 배열도 numpy 벡터화 ----
+            # SatrecArray는 그룹별로 ref/cand 2개짜리로 한 번에 전파
+            refine_arr = SatrecArray([sat_ref, sat_o])
+
             for group in groups:
-                # 그룹의 시간 범위: 그룹 첫/끝 인덱스 ± coarse_dt_pair
-                t_center_idx = group[len(group)//2]
-                t_center = times_coarse[t_center_idx]
-
-                # 정밀 refinement 범위
-                refine_start = t_center - timedelta(seconds=coarse_dt_pair)
-                refine_end = t_center + timedelta(seconds=coarse_dt_pair)
-
-                # 정밀 시간 그리드 생성
-                refine_total = (refine_end - refine_start).total_seconds()
+                t_center_idx = group[len(group) // 2]
+                # datetime 없이 offset(초)으로 t_center 계산
+                t_center_offset_s = t_center_idx * base_coarse_dt
+                refine_start_offset = t_center_offset_s - coarse_dt_pair
+                refine_total = 2.0 * coarse_dt_pair
                 n_refine = int(refine_total / pair_refine_step) + 1
-                jds_ref = np.empty(n_refine)
-                frs_ref = np.empty(n_refine)
-                times_ref = []
-                for ri in range(n_refine):
-                    rt = refine_start + timedelta(seconds=ri * pair_refine_step)
-                    times_ref.append(rt)
-                    jd_r, fr_r = jday(rt.year, rt.month, rt.day,
-                                      rt.hour, rt.minute,
-                                      rt.second + rt.microsecond / 1e6)
-                    jds_ref[ri] = jd_r
-                    frs_ref[ri] = fr_r
 
-                # 배치 SGP4 — 기준위성과 후보위성 동시 정밀 전파
-                e_rr, r_rr, _ = ref_arr.sgp4(jds_ref, frs_ref)
-                e_or, r_or, _ = o_arr.sgp4(jds_ref, frs_ref)
-                valid_r = (e_rr[0] == 0) & (e_or[0] == 0)
+                # refine 구간 기준점: start + refine_start_offset
+                refine_t0 = start + timedelta(seconds=refine_start_offset)
+                jds_ref, frs_ref = self._make_jd_arrays(refine_t0, n_refine, pair_refine_step)
 
+                e_rr, r_rr, _ = refine_arr.sgp4(jds_ref, frs_ref)
+                # e_rr: (2, n_refine), r_rr: (2, n_refine, 3)
+                valid_r = (e_rr[0] == 0) & (e_rr[1] == 0)
                 if not np.any(valid_r):
                     continue
 
                 d_refine = np.full(n_refine, np.inf)
-                d_refine[valid_r] = np.linalg.norm(r_rr[0][valid_r] - r_or[0][valid_r], axis=1)
-
-                min_idx = np.argmin(d_refine)
+                d_refine[valid_r] = np.linalg.norm(
+                    r_rr[0][valid_r] - r_rr[1][valid_r], axis=1
+                )
+                min_idx = int(np.argmin(d_refine))
                 best_d = d_refine[min_idx]
-                best_t = times_ref[min_idx]
-
                 if best_d > pair_d_tol:
                     continue
 
-                # 중복 방지: 이전에 추가된 후보와의 시간 차이 확인
+                best_t = refine_t0 + timedelta(seconds=min_idx * pair_refine_step)
+
                 new_cand = {
                     "ref_time": best_t,
                     "cand_time": best_t,
@@ -592,7 +597,6 @@ class CA_filter:
                     last_added_t = best_t
                     last_added_d = best_d
                 else:
-                    # 동일 시간대면 더 가까운 것만 유지
                     if best_d < last_added_d:
                         for idx_rev in range(len(candidates) - 1, -1, -1):
                             c = candidates[idx_rev]
@@ -616,8 +620,11 @@ class CA_filter:
         - 최종 최소거리 < 5km 이면 이벤트로 확정
         - Alfano 2D 최대 충돌확률 계산 (만남 평면 투영 기반)
 
-        [성능]
-        - 후보 수가 적으므로 (일반적으로 수십 개) 순차 처리해도 빠름
+        [최적화 2026-05-23]
+        - 기존: Python 루프로 1초마다 개별 SGP4 호출 (600회/후보)
+        - 개선: SatrecArray 2개짜리 배열로 전체 시간 배열 한 번에 전파
+        - secondary refinement (0.1s)도 동일 방식으로 배치 처리
+        - 정확도 변화 없음 (동일 SGP4 엔진, 동일 시간 그리드)
 
         Args:
             ref_sat:    기준 위성 TLE 튜플 (norad, line1, line2, epoch)
@@ -631,93 +638,82 @@ class CA_filter:
               sat1_ephem, sat2_ephem, probability, rel_vec
         """
         results = []
-        # 기준 위성 SGP4 객체 생성
         sat_ref = Satrec.twoline2rv(ref_sat[1], ref_sat[2])
 
         for cand in candidates:
-            # 후보 위성 SGP4 객체 생성
             sat_o = Satrec.twoline2rv(cand["cand_sat"][1], cand["cand_sat"][2])
-            # Candidate-centered sampling window (minimum 600s for adequate TCA search)
             center = cand.get("t_center") or min(cand["ref_time"], cand["cand_time"])
             window_s = max(600.0, float(cand.get("time_window", 600.0)))
             n_steps = int(window_s / dt_s) + 1
             start_t = center - timedelta(seconds=window_s / 2)
-            times = [start_t + timedelta(seconds=i * dt_s) for i in range(n_steps)]
 
-            min_dist = np.inf
-            t_min = None
-            min_s1, min_s2 = [], []
-            ephemeris_sat1 = []
-            ephemeris_sat2 = []
-            for t in times:
-                # SGP4 propagate
-                jd, fr = jday(
-                    t.year,
-                    t.month,
-                    t.day,
-                    t.hour,
-                    t.minute,
-                    t.second + t.microsecond / 1e6,
-                )
-                # 기준 위성 위치 계산
-                e1, r1, v1 = sat_ref.sgp4(jd, fr)
-                # 후보 위성 위치 계산
-                e2, r2, v2 = sat_o.sgp4(jd, fr)
-                # SGP4 에러 발생 시 해당 시각 건너뜀
-                if e1 != 0 or e2 != 0:
-                    continue                
+            # [최적화 2026-05-23] numpy 벡터화로 JD 배열 생성 후 SatrecArray 배치 전파
+            jds, frs = self._make_jd_arrays(start_t, n_steps, dt_s)
+            pair_arr = SatrecArray([sat_ref, sat_o])
+            e_pair, r_pair, v_pair = pair_arr.sgp4(jds, frs)
+            # e_pair: (2, n_steps), r_pair: (2, n_steps, 3), v_pair: (2, n_steps, 3)
 
-                ephemeris_sat1.append(np.hstack((t, r1, v1)))
-                ephemeris_sat2.append(np.hstack((t, r2, v2)))
+            valid = (e_pair[0] == 0) & (e_pair[1] == 0)
+            if not np.any(valid):
+                continue
 
-                r1 = np.array(r1)  # 기준 위성 위치 벡터
-                r2 = np.array(r2)  # 후보 위성 위치 벡터
-                d = np.linalg.norm(r1 - r2)  # 두 위성 간 거리 계산
-                if d < min_dist:  # 최소 거리 및 해당 시각 갱신
-                    min_dist = d
-                    t_min = t
-                    min_s1 = np.hstack((r1, v1))
-                    min_s2 = np.hstack((r2, v2))
+            # 거리 배열 계산
+            diff = r_pair[0] - r_pair[1]           # (n_steps, 3)
+            dists = np.full(n_steps, np.inf)
+            dists[valid] = np.linalg.norm(diff[valid], axis=1)
 
-            # Secondary refinement: finer 0.1s sampling around detected minimum
-            # to catch fast crossings where 1s sampling is too coarse
-            if t_min is not None and min_dist < self.critera['minium_distance'] * 3.0:
-                refine_half = 2.0  # ±2s around coarse minimum
+            min_idx = int(np.argmin(dists))
+            min_dist = dists[min_idx]
+            t_min = start_t + timedelta(seconds=min_idx * dt_s)
+            min_s1 = np.hstack((r_pair[0][min_idx], v_pair[0][min_idx]))
+            min_s2 = np.hstack((r_pair[1][min_idx], v_pair[1][min_idx]))
+
+            # ephemeris 저장 (유효 시점만)
+            valid_indices = np.where(valid)[0]
+            ephemeris_sat1 = [
+                np.hstack((start_t + timedelta(seconds=int(i) * dt_s),
+                           r_pair[0][i], v_pair[0][i]))
+                for i in valid_indices
+            ]
+            ephemeris_sat2 = [
+                np.hstack((start_t + timedelta(seconds=int(i) * dt_s),
+                           r_pair[1][i], v_pair[1][i]))
+                for i in valid_indices
+            ]
+
+            # Secondary refinement: ±2s / 0.1s — 빠른 교차 포착
+            if min_dist < self.critera['minium_distance'] * 3.0:
+                refine_half = 2.0
                 refine_dt = 0.1
                 n_refine = int(2 * refine_half / refine_dt) + 1
-                for ri in range(n_refine):
-                    rt = t_min - timedelta(seconds=refine_half) + timedelta(seconds=ri * refine_dt)
-                    jd_r, fr_r = jday(rt.year, rt.month, rt.day, rt.hour, rt.minute,
-                                      rt.second + rt.microsecond / 1e6)
-                    e1r, r1r, v1r = sat_ref.sgp4(jd_r, fr_r)
-                    e2r, r2r, v2r = sat_o.sgp4(jd_r, fr_r)
-                    if e1r != 0 or e2r != 0:
-                        continue
-                    dr = np.linalg.norm(np.array(r1r) - np.array(r2r))
-                    if dr < min_dist:
-                        min_dist = dr
-                        t_min = rt
-                        min_s1 = np.hstack((r1r, v1r))
-                        min_s2 = np.hstack((r2r, v2r))
+                refine_t0 = t_min - timedelta(seconds=refine_half)
+                jds_r, frs_r = self._make_jd_arrays(refine_t0, n_refine, refine_dt)
+                e_r, r_r, v_r = pair_arr.sgp4(jds_r, frs_r)
+                valid_r = (e_r[0] == 0) & (e_r[1] == 0)
+                if np.any(valid_r):
+                    d_r = np.full(n_refine, np.inf)
+                    d_r[valid_r] = np.linalg.norm(r_r[0][valid_r] - r_r[1][valid_r], axis=1)
+                    ri_min = int(np.argmin(d_r))
+                    if d_r[ri_min] < min_dist:
+                        min_dist = d_r[ri_min]
+                        t_min = refine_t0 + timedelta(seconds=ri_min * refine_dt)
+                        min_s1 = np.hstack((r_r[0][ri_min], v_r[0][ri_min]))
+                        min_s2 = np.hstack((r_r[1][ri_min], v_r[1][ri_min]))
 
-            # 최소 거리 조건 만족 시 결과에 추가
-            if t_min is not None and min_dist < self.critera['minium_distance']:
+            if min_dist < self.critera['minium_distance']:
                 prob, rel = orcal.alfano_2d_collision_probability(min_s1, min_s2)
-                results.append(
-                    {
-                        # 'type': cand['type'],
-                        "sat1_norad": ref_sat[0],  # 기준 위성 NORAD 번호 (tuple element)
-                        "sat2_norad": cand["cand_sat"][0],  # 상대 위성 NORAD 번호 (tuple element)
-                        "ref_time": cand["ref_time"],  # 기준 위성 기준 시각
-                        "other_time": cand["cand_time"],  # 상대 위성 기준 시각
-                        "closest_distance_km": min_dist,  # 최소 접근 거리
-                        "closest_time": t_min,  # 최소 접근 거리 발생 시각
-                        "sat1_ephem": ephemeris_sat1,
-                        "sat2_ephem": ephemeris_sat2,
-                        "probability": prob,
-                        "rel_vec": rel
-                    }
-                )
+                results.append({
+                    "sat1_norad": ref_sat[0],
+                    "sat2_norad": cand["cand_sat"][0],
+                    "ref_time": cand["ref_time"],
+                    "other_time": cand["cand_time"],
+                    "closest_distance_km": min_dist,
+                    "closest_time": t_min,
+                    "sat1_ephem": ephemeris_sat1,
+                    "sat2_ephem": ephemeris_sat2,
+                    "probability": prob,
+                    "rel_vec": rel,
+                })
         return results
 
     def get_state_at_altitude(self, sat, start_time, target_altitude_km, max_days=30, step_minutes=10):
