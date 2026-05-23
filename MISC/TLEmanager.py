@@ -261,6 +261,45 @@ class TLEmanager:
         print(f"TLE downloaded and saved to {save_path}")
         return save_path
 
+    def fetch_all_tles_from_api(self):
+        """웹서버 backend API에서 전체 TLE 목록 취득.
+        반환 형식: list of (norad, line1, line2, tle_epoch_datetime)
+        space-track 직접 접근 없이 tle_fetcher가 갱신한 TLE_LATEST를 활용.
+        """
+        import MISC.config as cfg
+        from datetime import datetime, timezone
+        url = cfg.API_BASE_URL.rstrip('/') + '/api/tle/all'
+        headers = {}
+        # 서버가 WORKER_ALLOWED_IPS로 IP 인증 시 토큰 불필요.
+        # CA_API_TOKEN이 있으면 포함 (개발/테스트 환경 fallback).
+        token = getattr(cfg, 'CA_API_TOKEN', None)
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+        resp = requests.get(url, headers=headers, timeout=120)
+        resp.raise_for_status()
+        rows = resp.json()
+        result = []
+        for r in rows:
+            norad = r.get('norad')
+            line1 = r.get('line1', '')
+            line2 = r.get('line2', '')
+            if not line1 or not line2:
+                continue
+            # epoch: API에서 제공하면 파싱, 없으면 line1에서 직접 추출
+            epoch_dt = None
+            if r.get('tle_epoch'):
+                try:
+                    epoch_dt = datetime.fromisoformat(r['tle_epoch'].replace('Z', '+00:00'))
+                except Exception:
+                    pass
+            if epoch_dt is None:
+                try:
+                    epoch_str = line1[18:32].strip()
+                    epoch_dt = self.tlepoch_to_datetime(epoch_str)
+                except Exception:
+                    pass
+            result.append((norad, line1, line2, epoch_dt))
+        return result
 
 
 # module intended for import; example usage removed

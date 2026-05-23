@@ -144,11 +144,30 @@ if __name__ == "__main__":
     print(f"[설정] 분석 기간: {analysis_start:%Y-%m-%d %H:%M} → {analysis_end:%Y-%m-%d %H:%M} ({analysis_days}일)")
 
     # 분석 시점 기준 최신 TLE 스냅샷 (NORAD별 1건)
-    tle_all = db_manager.get_latest_TLEs_asof(analysis_start)
+    # TLE_FETCH_FROM_API=True이면 웹서버 backend API 사용 (space-track 직접 접근 없음)
+    if config.TLE_FETCH_FROM_API:
+        print('[TLE] 웹서버 backend API에서 TLE 로딩 중... (/api/tle/all)')
+        try:
+            tle_all = tle_manager.fetch_all_tles_from_api()
+            print(f'[TLE] API에서 {len(tle_all)}건 수신')
+        except Exception as _api_err:
+            print(f'[TLE] API 취득 실패 ({_api_err}), 로컬 DB로 fallback')
+            tle_all = db_manager.get_latest_TLEs_asof(analysis_start)
+    else:
+        tle_all = db_manager.get_latest_TLEs_asof(analysis_start)
     filtered_tle = tle_manager.filter_outdated_tles(
         tle_all, analysis_start, analysis_end, pad_days=TLE_AGE_LIMIT
     )
     print(f"[필터] 유효 TLE: {len(filtered_tle)} / {len(tle_all)}")
+
+    MIN_TLE_COUNT = 1000
+    if len(filtered_tle) < MIN_TLE_COUNT:
+        logging.error(
+            f"[CA] 유효 TLE 부족: {len(filtered_tle)}건 (최소 {MIN_TLE_COUNT}건 필요). "
+            f"TLE 소스: {'API' if config.TLE_FETCH_FROM_API else '로컬DB'}, "
+            f"전체 TLE: {len(tle_all)}건. 분석을 중단합니다."
+        )
+        sys.exit(2)
 
     # ─── Primary 위성 선택 / Select primary satellites ───
     def _find_primary(norad_id):

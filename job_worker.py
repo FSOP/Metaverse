@@ -392,7 +392,10 @@ def _run_subprocess_with_heartbeat(cmd, timeout_s: int, heartbeat_cb=None, heart
         except subprocess.TimeoutExpired:
             if heartbeat_cb:
                 try:
-                    heartbeat_cb()
+                    ok = heartbeat_cb()
+                    if ok is False:
+                        heartbeat_cb = None
+                        _debug_log("heartbeat 거부됨 — 이후 heartbeat 중단", "WARNING")
                 except Exception as hb_err:
                     _debug_log(f"heartbeat 콜백 오류: {hb_err}", "WARNING")
 
@@ -918,9 +921,13 @@ def process_generic_task(task: dict, heartbeat_cb=None, heartbeat_interval_s: in
     _debug_log_dict("범용 작업 payload", payload)
 
     if task_type == "TLE_UPDATE":
-        out = _handle_tle_update_job(payload, heartbeat_cb=heartbeat_cb, heartbeat_interval_s=heartbeat_interval_s)
-        out.setdefault("result", {})["task_type"] = task_type
-        return out
+        # TLE update is handled by tle_fetcher container on web server
+        log.info("[TLE_UPDATE] tle_fetcher handles this - skipping")
+        return {"status": "done", "result": {
+            "task_type": task_type, "skipped": True,
+            "reason": "tle_fetcher on web server handles TLE updates"
+        }}
+
 
     if task_type == "CA_ANALYSIS":
         out = _handle_ca_batch_job(payload, heartbeat_cb=heartbeat_cb, heartbeat_interval_s=heartbeat_interval_s)
@@ -1196,8 +1203,8 @@ class AnalysisJobClient:
             _debug_log_response(url, resp.status_code, resp.text)
             if resp.status_code in (200, 201):
                 return True
-            if resp.status_code in (404, 409):
-                log.warning("task heartbeat 거부 (task_id=%s): %s", task_id, resp.text)
+            if resp.status_code in (404, 409, 429):
+                log.warning("task heartbeat 거부 (task_id=%s): %s", task_id, resp.text[:200])
                 return False
             resp.raise_for_status()
             return True
@@ -1230,8 +1237,8 @@ class AnalysisJobClient:
             _debug_log_response(url, resp.status_code, resp.text)
             if resp.status_code in (200, 201):
                 return True
-            if resp.status_code in (404, 409):
-                log.warning("analysis heartbeat 거부 (job_id=%s): %s", job_id, resp.text)
+            if resp.status_code in (404, 409, 429):
+                log.warning("analysis heartbeat 거부 (job_id=%s): %s", job_id, resp.text[:200])
                 return False
             resp.raise_for_status()
             return True
@@ -1394,6 +1401,10 @@ def main():
                 task_type = _normalize_task_type(task)
                 _debug_log(f"범용 작업 처리 시작: task_id={task_id}, task_type={task_type}", "INFO")
 
+                if task_type == "TLE_UPDATE":
+                    _debug_log(f"[TLE_UPDATE] tle_fetcher가 처리 — claim 건너뜀 (task_id={task_id})", "INFO")
+                    continue
+
                 if not client.claim_task(task_id, worker_id=worker_id):
                     log.warning("범용 작업 할당 실패, 다음 폴링에서 재시도. task_id=%s", task_id)
                     continue
@@ -1411,7 +1422,7 @@ def main():
                     )
 
                     def _task_hb():
-                        client.send_task_heartbeat(
+                        return client.send_task_heartbeat(
                             task_id,
                             worker_id=worker_id,
                             progress=50,
@@ -1481,7 +1492,7 @@ def main():
                     )
 
                     def _job_hb():
-                        client.send_job_heartbeat(
+                        return client.send_job_heartbeat(
                             job_id,
                             worker_id=worker_id,
                             progress=50,

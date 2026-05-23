@@ -37,3 +37,7 @@ TLE_SOURCE = _env_get("TLE_SOURCE", "auto")
 
 def now_epoch():
     return datetime.now(timezone.utc)
+
+# TLE 소스 전환: True이면 웹서버 backend API에서 TLE 취득 (space-track 직접 접근 안 함)
+# tle_fetcher 컨테이너(웹서버)가 space-track 창구를 일원화
+TLE_FETCH_FROM_API = _env_get('TLE_FETCH_FROM_API', 'true').lower() in ('1', 'true', 'yes')

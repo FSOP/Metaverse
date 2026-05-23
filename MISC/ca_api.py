@@ -7,7 +7,8 @@ ca_api.py — CA 분석 결과 API 전송 모듈
 
 [전송 포맷]
   POST /api/ca_events (단건) 또는 POST /api/ca_events/batch (배치)
-  Bearer 토큰 인증 (환경변수 CA_API_TOKEN)
+  서버가 WORKER_ALLOWED_IPS를 설정한 경우 IP만으로 인증 (토큰 불필요).
+  미설정 환경(개발/테스트)에서는 CA_API_TOKEN Bearer 토큰으로 fallback.
 
 [페이로드 필드]
   sat1_norad, sat2_norad, sat1_name, sat2_name,
@@ -45,16 +46,15 @@ class CAEventSender:
         self.session = requests.Session()
 
     def _get_headers(self):
+        headers = {"Content-Type": "application/json"}
+        # Bearer 토큰은 서버가 WORKER_ALLOWED_IPS 미설정(개발/테스트) 환경에서만 필요.
+        # 운영 환경에서는 IP 화이트리스트로 인증하므로 토큰 없이도 동작.
         token = (getattr(_config, 'CA_API_TOKEN', None)
                  or os.getenv("CA_API_TOKEN")
                  or getattr(_config, 'EPHEMERIS_API_KEY', None))
-        if not token:
-            logging.error("CA_API_TOKEN is missing. API send aborted.")
-            return None
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
 
     def _format_time(self, dt):
         if dt is None:
@@ -108,8 +108,6 @@ class CAEventSender:
 
     def _post_with_retry(self, endpoint: str, payload):
         headers = self._get_headers()
-        if headers is None:
-            return False
         url = f"{self.base_url}{endpoint}"
         for attempt in range(1, self.max_retries + 1):
             try:
